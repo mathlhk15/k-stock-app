@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from pykrx import stock
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 def is_valid(v):
@@ -15,10 +15,10 @@ def percentile_rank(series: pd.Series, x: float) -> float:
     return float((s <= x).mean() * 100)
 
 
-def calculate_quality_score(symbol, market):
+def calculate_quality_score(symbol, market, listing_df):
     """
-    ROE 업종 백분위 대신 v3 안정형에서는
-    동일 시장(KOSPI/KOSDAQ) 전체 내 ROE 백분위 사용
+    v4:
+    동일 시장 + 동일 섹터 내 ROE 백분위
     """
     try:
         today = datetime.today().strftime("%Y%m%d")
@@ -30,10 +30,14 @@ def calculate_quality_score(symbol, market):
                 "score": 0,
                 "roe": None,
                 "roe_percentile": None,
+                "sector": None,
                 "reason": "ROE 데이터 없음",
             }
 
         temp = df.copy()
+        temp = temp.reset_index().rename(columns={"티커": "Symbol"})
+        temp["Symbol"] = temp["Symbol"].astype(str)
+
         temp["BPS"] = pd.to_numeric(temp["BPS"], errors="coerce")
         temp["EPS"] = pd.to_numeric(temp["EPS"], errors="coerce")
         temp["ROE"] = np.where(
@@ -42,7 +46,28 @@ def calculate_quality_score(symbol, market):
             np.nan,
         )
 
-        current_roe = temp.loc[symbol, "ROE"]
+        listing = listing_df.copy()
+        listing["Symbol"] = listing["Symbol"].astype(str)
+
+        if "Sector" not in listing.columns:
+            listing["Sector"] = "N/A"
+
+        merged = temp.merge(listing[["Symbol", "Sector"]], on="Symbol", how="left")
+
+        row = merged[merged["Symbol"] == str(symbol)]
+        if row.empty:
+            return {
+                "available": False,
+                "score": 0,
+                "roe": None,
+                "roe_percentile": None,
+                "sector": None,
+                "reason": "종목 매칭 실패",
+            }
+
+        row = row.iloc[0]
+        sector = row.get("Sector", None)
+        current_roe = row.get("ROE", np.nan)
 
         if not is_valid(current_roe):
             return {
@@ -50,10 +75,21 @@ def calculate_quality_score(symbol, market):
                 "score": 0,
                 "roe": None,
                 "roe_percentile": None,
+                "sector": sector,
                 "reason": "ROE 계산 불가",
             }
 
-        pct = percentile_rank(temp["ROE"], float(current_roe))
+        peer = merged.copy()
+        if sector is not None and pd.notna(sector):
+            peer = peer[peer["Sector"] == sector]
+
+        peer = peer[pd.to_numeric(peer["ROE"], errors="coerce").notna()]
+
+        if len(peer) < 5:
+            # 업종 표본이 너무 작으면 시장 전체 fallback
+            peer = merged[pd.to_numeric(merged["ROE"], errors="coerce").notna()]
+
+        pct = percentile_rank(peer["ROE"], float(current_roe))
 
         if pct >= 90:
             score = 30
@@ -67,6 +103,7 @@ def calculate_quality_score(symbol, market):
             "score": score,
             "roe": float(current_roe),
             "roe_percentile": pct,
+            "sector": sector,
             "reason": "",
         }
 
@@ -76,14 +113,16 @@ def calculate_quality_score(symbol, market):
             "score": 0,
             "roe": None,
             "roe_percentile": None,
+            "sector": None,
             "reason": f"Quality 계산 실패: {e}",
         }
 
 
 def calculate_supply_score(investor_df):
     """
+    v4:
     최근 20거래일 외국인+기관 순매수 강도 백분위
-    v3 안정형에서는 절대 유통주식수 대신 1년 자기분포 기준으로만 계산
+    (자기 분포형 유지)
     """
     try:
         if investor_df is None or len(investor_df) < 30:
@@ -205,15 +244,15 @@ def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
         reasons.append("RSI>=50 +5")
 
     if score >= 80:
-        grade = "강한 매수"
+        grade = "Strong Buy"
     elif score >= 65:
-        grade = "매수"
+        grade = "Buy"
     elif score >= 50:
-        grade = "보류"
+        grade = "Hold"
     elif score >= 35:
-        grade = "주의"
+        grade = "Caution"
     else:
-        grade = "회피"
+        grade = "Avoid"
 
     # 제한 규칙
     if not pbr_stats.get("available") and grade in ["Strong Buy", "Buy"]:
