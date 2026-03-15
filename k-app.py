@@ -13,9 +13,9 @@ from kr_scoring import (
 from kr_ui import render_full_report
 
 
-st.set_page_config(page_title="한국형 퀀트 주식 분석 엔진 v4", layout="wide")
+st.set_page_config(page_title="한국형 퀀트 주식 분석 엔진 v4.1", layout="wide")
 
-st.title("📊 한국형 퀀트 주식 분석 엔진 v4")
+st.title("📊 한국형 퀀트 주식 분석 엔진 v4.1")
 
 user_input = st.text_input("회사명 또는 종목코드 입력", "삼성전자")
 
@@ -57,3 +57,11 @@ if user_input:
     )
 
     render_full_report(analysis)
+
+    with st.expander("디버그 데이터 확인"):
+        st.write("pbr_stats", pbr_stats)
+        st.write("quality_result", quality_result)
+        st.write("supply_result", supply_result)
+        st.write("funda_snapshot", funda_snapshot)
+        st.write("investor_df columns", list(investor_df.columns) if investor_df is not None and not investor_df.empty else "N/A")
+        st.write("listing_df columns", list(listing_df.columns) if listing_df is not None and not listing_df.empty else "N/A")
