@@ -1,11 +1,15 @@
 """
-kr_data_fundamental.py  v6.0
+kr_data_fundamental.py  v6.1
 DART OpenAPI 기반으로 전면 업그레이드:
 - PBR 시계열: DART 연도별 BPS + FDR 월별 주가 → 정확한 PBR 계산
 - funda_snapshot: DART 최신 재무제표 직접 값
 - ROE: DART 당기순이익 / 자본으로 직접 계산
 - yfinance는 DART 실패 시 보조로만 사용
+- v6.1: Python 3.9 호환 (str | None → Optional[str], tuple[...] → Tuple[...])
 """
+from __future__ import annotations
+from typing import Optional, Tuple
+
 import numpy as np
 import pandas as pd
 import FinanceDataReader as fdr
@@ -18,7 +22,7 @@ def is_valid(v):
     return v is not None and not pd.isna(v) and np.isfinite(v)
 
 
-def _get_dart_key() -> str | None:
+def _get_dart_key() -> Optional[str]:
     """Streamlit secrets에서 DART API 키 로드"""
     try:
         return st.secrets["DART_API_KEY"]
@@ -34,7 +38,7 @@ def _to_yf_symbol(symbol: str) -> str:
 # DART 유틸
 # ──────────────────────────────────────────────
 
-def _get_dart_corp_code(symbol: str) -> str | None:
+def _get_dart_corp_code(symbol: str) -> Optional[str]:
     """
     종목코드 → DART corp_code 변환
     opendartreader 사용
@@ -199,7 +203,7 @@ def _get_price_monthly(symbol: str) -> pd.Series:
         return pd.Series(dtype=float)
 
 
-def _build_pbr_from_dart_bps(symbol: str, price_monthly: pd.Series) -> tuple[pd.Series, str]:
+def _build_pbr_from_dart_bps(symbol: str, price_monthly: pd.Series) -> Tuple[pd.Series, str]:
     """
     DART 연도별 BPS + 월별 주가 → PBR 시계열
     BPS를 연말 기준으로 forward-fill
@@ -260,7 +264,7 @@ def _build_pbr_from_dart_bps(symbol: str, price_monthly: pd.Series) -> tuple[pd.
 
 def build_pbr_statistics(symbol, price_df):
     """
-    v6.0 — DART BPS primary, FDR/yfinance fallback
+    v6.1 — DART BPS primary, FDR/yfinance fallback
     """
     try:
         price_monthly = _get_price_monthly(symbol)
@@ -328,26 +332,27 @@ def build_pbr_statistics(symbol, price_df):
                                           else d
                                           for i, d in enumerate(eq_s.index)]
 
-                        bps_s = eq_s / shares
-                        # 단위 확인: BPS < 1000이면 달러 단위로 판단 → KRW 환산
-                        if bps_s.mean() < 1000:
-                            bps_s = bps_s * 1350
-                        # 연말 날짜로 정규화 → 월별 forward-fill
-                        bps_s.index = pd.to_datetime(
-                            [f"{d.year}-12-31" if d.month == 12
-                             else f"{d.year}-{d.month:02d}-{d.day:02d}"
-                             for d in bps_s.index]
-                        )
-                        bps_s = bps_s.sort_index()
-                        bps_monthly = bps_s.resample("ME").last().reindex(
-                            price_monthly.index, method="ffill"
-                        ).dropna()
-                        if len(bps_monthly) >= 12:
-                            pbr = price_monthly.reindex(bps_monthly.index) / bps_monthly
-                            pbr = pbr.dropna()
-                            pbr = pbr[(pbr > 0) & (pbr < 50)]
-                            if len(pbr) >= 12:
-                                source = "yfinance-equity-series"
+                        if len(eq_s) >= 2:
+                            bps_s = eq_s / shares
+                            # 단위 확인: BPS < 1000이면 달러 단위로 판단 → KRW 환산
+                            if bps_s.mean() < 1000:
+                                bps_s = bps_s * 1350
+                            # 연말 날짜로 정규화 → 월별 forward-fill
+                            bps_s.index = pd.to_datetime(
+                                [f"{d.year}-12-31" if d.month == 12
+                                 else f"{d.year}-{d.month:02d}-{d.day:02d}"
+                                 for d in bps_s.index]
+                            )
+                            bps_s = bps_s.sort_index()
+                            bps_monthly = bps_s.resample("ME").last().reindex(
+                                price_monthly.index, method="ffill"
+                            ).dropna()
+                            if len(bps_monthly) >= 12:
+                                pbr = price_monthly.reindex(bps_monthly.index) / bps_monthly
+                                pbr = pbr.dropna()
+                                pbr = pbr[(pbr > 0) & (pbr < 50)]
+                                if len(pbr) >= 12:
+                                    source = "yfinance-equity-series"
 
                     # 최후 수단: 최신 equity 1개로 역산
                     if len(pbr) == 0 and eq_series:
@@ -382,7 +387,6 @@ def build_pbr_statistics(symbol, price_df):
 
         if len(pbr) < min_months:
             # 시계열 부족 → funda_snapshot의 현재 PBR만으로 부분 제공
-            # current_pbr은 yfinance info에서 직접 시도
             fallback_pbr = None
             try:
                 _info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
@@ -446,7 +450,7 @@ def build_pbr_statistics(symbol, price_df):
 
 def get_basic_fundamental_snapshot(symbol):
     """
-    v6.0 — DART 주요재무지표 우선, yfinance 보완
+    v6.1 — DART 주요재무지표 우선, yfinance 보완
     """
     result = {
         "BPS": None, "PER": None, "PBR": None,
@@ -495,7 +499,7 @@ def get_basic_fundamental_snapshot(symbol):
 
         # PBR/BPS (DART/FDR 모두 없을 때)
         if result["PBR"] is None or result["BPS"] is None:
-            # FDR 상장주식수 우선 (제미나이 제안: yfinance보다 정확)
+            # FDR 상장주식수 우선 (yfinance보다 정확)
             fdr_shares = None
             try:
                 _fdr_df = fdr.DataReader(symbol)
