@@ -15,11 +15,26 @@ def percentile_rank(series: pd.Series, x: float) -> float:
     return float((s <= x).mean() * 100)
 
 
+def _rename_fundamental_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or len(df) == 0:
+        return pd.DataFrame()
+
+    temp = df.copy()
+    rename_map = {
+        "티커": "Symbol",
+        "배당수익률": "DIV",
+        "주당배당금": "DPS",
+    }
+    temp = temp.rename(columns=rename_map)
+    return temp
+
+
 def calculate_quality_score(symbol, market, listing_df):
     """
-    v4.1:
-    동일 시장 + 동일 섹터 우선
-    실패 시 시장 전체 ROE 백분위 fallback
+    v4.2
+    - 동일 시장 + 동일 섹터 우선
+    - 실패 시 시장 전체 fallback
+    - 컬럼명 방어
     """
     try:
         today = datetime.today().strftime("%Y%m%d")
@@ -35,10 +50,25 @@ def calculate_quality_score(symbol, market, listing_df):
                 "reason": "ROE 데이터 없음",
             }
 
-        temp = df.copy().reset_index()
-        symbol_col = "티커" if "티커" in temp.columns else temp.columns[0]
-        temp = temp.rename(columns={symbol_col: "Symbol"})
+        temp = _rename_fundamental_columns(df).reset_index()
+
+        # 첫 컬럼이 티커일 가능성 방어
+        if "Symbol" not in temp.columns:
+            temp = temp.rename(columns={temp.columns[0]: "Symbol"})
+
         temp["Symbol"] = temp["Symbol"].astype(str)
+
+        required_cols = ["BPS", "EPS"]
+        for col in required_cols:
+            if col not in temp.columns:
+                return {
+                    "available": False,
+                    "score": 0,
+                    "roe": None,
+                    "roe_percentile": None,
+                    "sector": None,
+                    "reason": f"필수 컬럼 없음: {list(temp.columns)}",
+                }
 
         temp["BPS"] = pd.to_numeric(temp["BPS"], errors="coerce")
         temp["EPS"] = pd.to_numeric(temp["EPS"], errors="coerce")
@@ -51,10 +81,19 @@ def calculate_quality_score(symbol, market, listing_df):
         listing = listing_df.copy()
         listing["Symbol"] = listing["Symbol"].astype(str)
 
-        if "Sector" not in listing.columns:
-            listing["Sector"] = "N/A"
+        # FDR listing에는 Sector가 없을 수 있으므로 산업 대체 필드 준비
+        sector_col = None
+        for c in ["Sector", "Industry", "Dept", "Market"]:
+            if c in listing.columns:
+                sector_col = c
+                break
 
-        merged = temp.merge(listing[["Symbol", "Sector"]], on="Symbol", how="left")
+        if sector_col is None:
+            listing["SectorProxy"] = "N/A"
+            sector_col = "SectorProxy"
+
+        merged = temp.merge(listing[["Symbol", sector_col]], on="Symbol", how="left")
+        merged = merged.rename(columns={sector_col: "SectorProxy"})
 
         row = merged[merged["Symbol"] == str(symbol)]
         if row.empty:
@@ -68,7 +107,7 @@ def calculate_quality_score(symbol, market, listing_df):
             }
 
         row = row.iloc[0]
-        sector = row.get("Sector", None)
+        sector = row.get("SectorProxy", None)
         current_roe = row.get("ROE", np.nan)
 
         if not is_valid(current_roe):
@@ -84,7 +123,7 @@ def calculate_quality_score(symbol, market, listing_df):
         # 업종 peer 우선, 부족하면 시장 전체 fallback
         peer = merged.copy()
         if sector is not None and pd.notna(sector) and str(sector).strip() != "":
-            peer_sector = peer[peer["Sector"] == sector]
+            peer_sector = peer[peer["SectorProxy"] == sector]
             peer_sector = peer_sector[pd.to_numeric(peer_sector["ROE"], errors="coerce").notna()]
             if len(peer_sector) >= 5:
                 peer = peer_sector
@@ -134,8 +173,9 @@ def calculate_quality_score(symbol, market, listing_df):
 
 def calculate_supply_score(investor_df):
     """
-    v4.1:
-    외국인/기관 컬럼 후보 확장
+    v4.2
+    - 컬럼 후보 확장
+    - 데이터 부족 시 reason 표시
     """
     try:
         if investor_df is None or len(investor_df) < 30:
@@ -216,7 +256,6 @@ def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
     score = 0
     reasons = []
 
-    # Valuation 40
     if pbr_stats.get("available"):
         z = pbr_stats.get("zscore")
 
@@ -236,19 +275,16 @@ def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
             score -= 20
             reasons.append("Valuation -20")
 
-    # Quality 30
     if quality_result.get("available"):
         qscore = quality_result.get("score", 0)
         score += qscore
         reasons.append(f"Quality +{qscore}")
 
-    # Supply 20
     if supply_result.get("available"):
         sscore = supply_result.get("score", 0)
         score += sscore
         reasons.append(f"Supply +{sscore}")
 
-    # Tech 10
     ma20 = price_df["MA20"].iloc[-1]
     ma60 = price_df["MA60"].iloc[-1]
     ma120 = price_df["MA120"].iloc[-1]
@@ -287,6 +323,7 @@ def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
     }
 
 
+# 아래 build_analysis_payload는 기존 그대로 사용
 def build_analysis_payload(
     symbol,
     name,
