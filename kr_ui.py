@@ -56,26 +56,31 @@ def card(title, value, desc="", tooltip=""):
             border-left:3px solid #3b82f6;
             border-radius:0 6px 6px 0;
             padding:10px 14px;
-            margin-top:8px;
+            margin-top:10px;
             font-size:13px;
             color:#1e40af;
-            line-height:1.6;
+            line-height:1.7;
         ">💡 {tooltip}</div>
         """
+    value_html = (
+        f'<div style="font-weight:800;font-size:20px;color:#0f172a;'
+        f'line-height:1.3;margin-bottom:8px;">{value}</div>'
+        if value else ""
+    )
     st.markdown(
         f"""
         <div style="
             background:#ffffff;
             border:1px solid #e2e8f0;
             border-radius:14px;
-            padding:18px 16px;
+            padding:16px;
             margin-bottom:12px;
-            box-shadow:0 2px 8px rgba(15,23,42,0.06);
+            box-shadow:0 1px 6px rgba(15,23,42,0.05);
         ">
-            <div style="color:#64748b;font-size:13px;font-weight:700;margin-bottom:6px;letter-spacing:0.3px;">{title}</div>
-            <div style="font-weight:800;font-size:22px;color:#0f172a;line-height:1.2;">{value}</div>
-            <div style="background:#f8fafc;border-left:3px solid #94a3b8;padding:10px 14px;margin-top:10px;
-                        border-radius:0 6px 6px 0;font-size:13px;color:#475569;line-height:1.6;">{desc}</div>
+            <div style="color:#64748b;font-size:12px;font-weight:700;
+                        margin-bottom:6px;letter-spacing:0.5px;">{title}</div>
+            {value_html}
+            <div style="font-size:13px;color:#475569;line-height:1.7;">{desc}</div>
             {tooltip_html}
         </div>
         """,
@@ -83,15 +88,30 @@ def card(title, value, desc="", tooltip=""):
     )
 
 
+def _stat_box(label, value, sub="", bg="#fff", border="#e2e8f0", color="#0f172a"):
+    """모바일용 수치 박스 — word-break으로 숫자 잘림 방지"""
+    return f"""
+    <div style="background:{bg};border:1px solid {border};border-radius:12px;
+                padding:13px 11px;min-height:76px;">
+        <div style="font-size:11px;color:#64748b;font-weight:700;
+                    margin-bottom:4px;letter-spacing:0.3px;">{label}</div>
+        <div style="font-size:16px;font-weight:900;color:{color};
+                    word-break:break-all;line-height:1.3;">{value}</div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:3px;">{sub}</div>
+    </div>
+    """
+
+
 def render_full_report(a):
+
     # ── 헤더 ──
     st.markdown(
         f"""
-        <div style="padding:4px 0 12px 0;">
-            <div style="font-size:22px;font-weight:900;color:#0f172a;line-height:1.3;">
+        <div style="padding:4px 0 14px 0;">
+            <div style="font-size:20px;font-weight:900;color:#0f172a;line-height:1.3;">
                 {a['name']}
             </div>
-            <div style="font-size:14px;color:#64748b;margin-top:2px;">
+            <div style="font-size:13px;color:#94a3b8;margin-top:3px;">
                 {a['symbol']} · {a['market']}
             </div>
         </div>
@@ -102,20 +122,31 @@ def render_full_report(a):
     # ── 등급 배너 ──
     bg, fg, border = _grade_color(a["grade"])
     score = a["score"]
+    score_reason = " · ".join(a["score_reasons"]) if a["score_reasons"] else "가산/감산 없음"
     st.markdown(
         f"""
-        <div style="
-            background:{bg};border:2px solid {border};border-radius:14px;
-            padding:16px 18px;margin-bottom:16px;
-            display:flex;justify-content:space-between;align-items:center;
-        ">
-            <div>
-                <div style="font-size:12px;font-weight:700;color:{fg};letter-spacing:1px;">종합 등급</div>
-                <div style="font-size:28px;font-weight:900;color:{fg};line-height:1.1;">{a['grade']}</div>
+        <div style="background:{bg};border:2px solid {border};border-radius:16px;
+                    padding:18px;margin-bottom:18px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;
+                        margin-bottom:12px;">
+                <div>
+                    <div style="font-size:11px;font-weight:700;color:{fg};
+                                letter-spacing:1px;margin-bottom:2px;">종합 등급</div>
+                    <div style="font-size:30px;font-weight:900;color:{fg};line-height:1.1;">
+                        {a['grade']}
+                    </div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-size:11px;font-weight:700;color:{fg};
+                                letter-spacing:1px;margin-bottom:2px;">종합 점수</div>
+                    <div style="font-size:30px;font-weight:900;color:{fg};line-height:1.1;">
+                        {score}점
+                    </div>
+                </div>
             </div>
-            <div style="text-align:right;">
-                <div style="font-size:12px;font-weight:700;color:{fg};">종합 점수</div>
-                <div style="font-size:28px;font-weight:900;color:{fg};">{score}점</div>
+            <div style="font-size:12px;color:{fg};opacity:0.85;
+                        border-top:1px solid {border};padding-top:10px;line-height:1.6;">
+                {score_reason}
             </div>
         </div>
         """,
@@ -125,7 +156,7 @@ def render_full_report(a):
     if a["flags"]:
         st.success(" | ".join(a["flags"]))
 
-    # ── 핵심 수치 2×2 그리드 ──
+    # ── 핵심 수치 2×2 ──
     st.markdown("### 📌 핵심 수치")
 
     pct = a["pct_change"]
@@ -136,29 +167,18 @@ def render_full_report(a):
     pbr_str = fmt_mul(a["pbr_stats"].get("current_pbr")) if a["pbr_stats"].get("available") else "N/A"
     mdd_str = fmt_pct(a["mdd"])
 
+    pct_sub = f'<span style="color:{pct_color};font-weight:700;">{pct_arrow} {abs(pct):.2f}%</span>'
+
     st.markdown(
         f"""
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
-            <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#64748b;font-weight:700;">현재 주가</div>
-                <div style="font-size:20px;font-weight:900;color:#0f172a;">{fmt_krw(a['current_price'])}</div>
-                <div style="font-size:13px;color:{pct_color};font-weight:700;">{pct_arrow} {abs(pct):.2f}%</div>
-            </div>
-            <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#64748b;font-weight:700;">현재 PBR</div>
-                <div style="font-size:20px;font-weight:900;color:#0f172a;">{pbr_str}</div>
-                <div style="font-size:13px;color:#64748b;">백분위 {fmt_pct(a['pbr_stats'].get('percentile'))}</div>
-            </div>
-            <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#64748b;font-weight:700;">ROE</div>
-                <div style="font-size:20px;font-weight:900;color:#0f172a;">{roe_str}</div>
-                <div style="font-size:13px;color:#64748b;">시장 백분위 {fmt_pct(a['quality_result'].get('roe_percentile'))}</div>
-            </div>
-            <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#64748b;font-weight:700;">MDD (1년)</div>
-                <div style="font-size:20px;font-weight:900;color:#dc2626;">{mdd_str}</div>
-                <div style="font-size:13px;color:#64748b;">고점 대비 최대 낙폭</div>
-            </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;">
+            {_stat_box("현재 주가", fmt_krw(a['current_price']), pct_sub)}
+            {_stat_box("현재 PBR", pbr_str,
+                       f"백분위 {fmt_pct(a['pbr_stats'].get('percentile'))}")}
+            {_stat_box("ROE",  roe_str,
+                       f"시장 백분위 {fmt_pct(a['quality_result'].get('roe_percentile'))}")}
+            {_stat_box("MDD (1년)", mdd_str, "고점 대비 최대 낙폭",
+                       "#fff5f5", "#fecaca", "#dc2626")}
         </div>
         """,
         unsafe_allow_html=True,
@@ -167,78 +187,58 @@ def render_full_report(a):
     # ── 분석 카드 ──
     st.markdown("### 📚 분석 카드")
 
-    # Valuation
     if a["pbr_stats"].get("available"):
         val_desc = (
-            f"평균 PBR {fmt_mul(a['pbr_stats'].get('mean_pbr'))} / "
-            f"Z-score {fmt_num(a['pbr_stats'].get('zscore'), 2)} / "
-            f"백분위 {fmt_pct(a['pbr_stats'].get('percentile'))} / "
+            f"평균 PBR {fmt_mul(a['pbr_stats'].get('mean_pbr'))} · "
+            f"Z-score {fmt_num(a['pbr_stats'].get('zscore'), 2)} · "
+            f"백분위 {fmt_pct(a['pbr_stats'].get('percentile'))}<br>"
             f"표본 {a['pbr_stats'].get('sample_months')}개월 ({a['pbr_stats'].get('sample_grade')})"
         )
-        card("📊 Valuation (PBR)", fmt_mul(a["pbr_stats"].get("current_pbr")), val_desc,
-             tooltip="Z-score ≤ -1이면 역사적 저평가, ≥ +1이면 고평가 구간입니다.")
+        card("📊 Valuation", fmt_mul(a["pbr_stats"].get("current_pbr")), val_desc,
+             tooltip="Z-score ≤ −1 : 역사적 저평가 / ≥ +1 : 고평가. 백분위 낮을수록 과거 대비 저렴합니다.")
     else:
-        card("📊 Valuation (PBR)", "N/A", f"분석 불가: {a['pbr_stats'].get('reason', '')}")
+        card("📊 Valuation", "N/A", f"분석 불가: {a['pbr_stats'].get('reason', '')}")
 
-    # Quality
     card(
         "🏅 Quality (ROE)",
-        f"ROE {roe_str}",
+        roe_str,
         (
-            f"시장 내 ROE 백분위 {fmt_pct(a['quality_result'].get('roe_percentile'))} / "
+            f"시장 내 ROE 백분위 {fmt_pct(a['quality_result'].get('roe_percentile'))} · "
             f"점수 {a['quality_result'].get('score', 0)}점"
             if a["quality_result"].get("available")
             else f"분석 불가: {a['quality_result'].get('reason', '')}"
         ),
-        tooltip="ROE = 당기순이익 ÷ 자기자본. 70백분위↑면 우량 기업입니다.",
+        tooltip="ROE = 당기순이익 ÷ 자기자본. 70백분위↑ 우량 / 90백분위↑ 최우량.",
     )
 
-    # 추세
-    trend_state = "📈 정배열" if (a["ma20"] > a["ma60"] > a["ma120"]) else "📉 혼조/역배열"
-    trend_desc = f"MA20 {fmt_krw(a['ma20'])} / MA60 {fmt_krw(a['ma60'])} / MA120 {fmt_krw(a['ma120'])}"
+    trend_state = "정배열 📈" if (a["ma20"] > a["ma60"] > a["ma120"]) else "혼조 / 역배열 📉"
+    trend_desc = (
+        f"MA20 {fmt_krw(a['ma20'])}<br>"
+        f"MA60 {fmt_krw(a['ma60'])}<br>"
+        f"MA120 {fmt_krw(a['ma120'])}"
+    )
     card("📐 추세", trend_state, trend_desc,
-         tooltip="MA20 > MA60 > MA120 정배열이면 단·중·장기 추세가 모두 상승 방향입니다.")
+         tooltip="MA20 > MA60 > MA120 정배열 → 단·중·장기 추세 모두 상승 방향.")
 
-    # 모멘텀
     card("⚡ 모멘텀", f"RSI {fmt_num(a['rsi'])}", a["macd_comment"],
-         tooltip="RSI 70↑ 과매수, 30↓ 과매도. MACD가 시그널선 위면 단기 상승 모멘텀.")
+         tooltip="RSI 70↑ 과매수 / 30↓ 과매도. MACD > 시그널선이면 단기 모멘텀 유효.")
 
-    # 거래량
     vol_text = fmt_num(a["vol_ratio"], 2) + "배" if a["vol_ratio"] is not None else "N/A"
     card("📦 거래량", vol_text, a["volume_comment"],
-         tooltip="현재 거래량 ÷ 20일 평균. 1.5배↑면 강한 수급 신호입니다.")
-
-    # 점수 근거
-    score_reason = " / ".join(a["score_reasons"]) if a["score_reasons"] else "가산/감산 요인 없음"
-    card("🔢 점수 근거", f"{score}점", score_reason,
-         tooltip="Valuation(±40) + Quality(30) + 기술(10). 80↑ Strong Buy / 65↑ Buy / 50↑ Hold / 35↑ Caution / 35↓ Avoid")
+         tooltip="현재 거래량 ÷ 20일 평균. 1.5배↑ 강한 수급 / 0.7배↓ 관망세.")
 
     # ── 지지/저항 ──
     st.markdown("### 📍 지지 / 저항")
     st.markdown(
         f"""
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
-            <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#166534;font-weight:700;">1차 지지</div>
-                <div style="font-size:18px;font-weight:900;color:#166534;">{fmt_krw(a['support_1'])}</div>
-            </div>
-            <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#166534;font-weight:700;">2차 지지</div>
-                <div style="font-size:18px;font-weight:900;color:#166534;">{fmt_krw(a['support_2'])}</div>
-            </div>
-            <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#991b1b;font-weight:700;">1차 저항</div>
-                <div style="font-size:18px;font-weight:900;color:#991b1b;">{fmt_krw(a['resistance_1'])}</div>
-            </div>
-            <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#991b1b;font-weight:700;">2차 저항</div>
-                <div style="font-size:18px;font-weight:900;color:#991b1b;">{fmt_krw(a['resistance_2'])}</div>
-            </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            {_stat_box("1차 지지", fmt_krw(a['support_1']), "", "#f0fdf4", "#86efac", "#166534")}
+            {_stat_box("2차 지지", fmt_krw(a['support_2']), "", "#f0fdf4", "#86efac", "#166534")}
+            {_stat_box("1차 저항", fmt_krw(a['resistance_1']), "", "#fef2f2", "#fca5a5", "#991b1b")}
+            {_stat_box("2차 저항", fmt_krw(a['resistance_2']), "", "#fef2f2", "#fca5a5", "#991b1b")}
         </div>
-        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin-bottom:16px;">
-            <div style="font-size:12px;color:#64748b;font-weight:700;">52주 고가</div>
-            <div style="font-size:18px;font-weight:900;color:#0f172a;">{fmt_krw(a['high_52'])}</div>
-        </div>
+        {_stat_box("52주 고가", fmt_krw(a['high_52']), "", "#f8fafc", "#e2e8f0", "#0f172a")}
+        <div style="margin-bottom:18px;"></div>
         """,
         unsafe_allow_html=True,
     )
@@ -247,18 +247,32 @@ def render_full_report(a):
     st.markdown("### 🎯 관심 구간")
     st.markdown(
         f"""
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
-            <div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#1e40af;font-weight:700;">1차 관심 구간</div>
-                <div style="font-size:15px;font-weight:800;color:#1e40af;">{fmt_krw(a['zone1_low'])}</div>
-                <div style="font-size:13px;color:#3b82f6;">~ {fmt_krw(a['zone1_high'])}</div>
-                <div style="font-size:12px;color:#64748b;margin-top:4px;">MA20 기준 단기 눌림목</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;">
+            <div style="background:#eff6ff;border:1px solid #93c5fd;
+                        border-radius:12px;padding:14px;">
+                <div style="font-size:11px;color:#1e40af;font-weight:700;margin-bottom:6px;">
+                    1차 관심
+                </div>
+                <div style="font-size:14px;font-weight:800;color:#1e40af;
+                            line-height:1.5;word-break:break-all;">
+                    {fmt_krw(a['zone1_low'])}<br>~ {fmt_krw(a['zone1_high'])}
+                </div>
+                <div style="font-size:11px;color:#64748b;margin-top:6px;">
+                    MA20 기준 단기 눌림목
+                </div>
             </div>
-            <div style="background:#f5f3ff;border:1px solid #c4b5fd;border-radius:12px;padding:14px;">
-                <div style="font-size:12px;color:#5b21b6;font-weight:700;">2차 보수 구간</div>
-                <div style="font-size:15px;font-weight:800;color:#5b21b6;">{fmt_krw(a['zone2_low'])}</div>
-                <div style="font-size:13px;color:#7c3aed;">~ {fmt_krw(a['zone2_high'])}</div>
-                <div style="font-size:12px;color:#64748b;margin-top:4px;">MA60 기준 보수적 재확인</div>
+            <div style="background:#f5f3ff;border:1px solid #c4b5fd;
+                        border-radius:12px;padding:14px;">
+                <div style="font-size:11px;color:#5b21b6;font-weight:700;margin-bottom:6px;">
+                    2차 보수
+                </div>
+                <div style="font-size:14px;font-weight:800;color:#5b21b6;
+                            line-height:1.5;word-break:break-all;">
+                    {fmt_krw(a['zone2_low'])}<br>~ {fmt_krw(a['zone2_high'])}
+                </div>
+                <div style="font-size:11px;color:#64748b;margin-top:6px;">
+                    MA60 기준 보수적 재확인
+                </div>
             </div>
         </div>
         """,
@@ -267,22 +281,26 @@ def render_full_report(a):
 
     # ── 투자 전략 ──
     st.markdown("### 🧭 투자 전략")
-    card("단기 전략 (1~2주)", "", a["short_strategy"])
-    card("중기 전략 (1~3개월)", "", a["mid_strategy"])
+    card("단기 (1~2주)", "", a["short_strategy"])
+    card("중기 (1~3개월)", "", a["mid_strategy"])
 
     # ── 시나리오 ──
     st.markdown("### ⚖️ 시나리오")
     st.markdown(
         f"""
         <div style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:14px;
-                    padding:16px 18px;margin-bottom:12px;">
-            <div style="font-weight:900;font-size:15px;color:#065f46;margin-bottom:8px;">🟢 강세 시나리오</div>
-            <div style="font-size:14px;color:#065f46;line-height:1.7;">{a['bull_scenario']}</div>
+                    padding:16px;margin-bottom:12px;">
+            <div style="font-weight:900;font-size:14px;color:#065f46;margin-bottom:8px;">
+                🟢 강세 시나리오
+            </div>
+            <div style="font-size:14px;color:#065f46;line-height:1.8;">{a['bull_scenario']}</div>
         </div>
         <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:14px;
-                    padding:16px 18px;margin-bottom:16px;">
-            <div style="font-weight:900;font-size:15px;color:#991b1b;margin-bottom:8px;">🔴 약세 시나리오</div>
-            <div style="font-size:14px;color:#991b1b;line-height:1.7;">{a['bear_scenario']}</div>
+                    padding:16px;margin-bottom:20px;">
+            <div style="font-weight:900;font-size:14px;color:#991b1b;margin-bottom:8px;">
+                🔴 약세 시나리오
+            </div>
+            <div style="font-size:14px;color:#991b1b;line-height:1.8;">{a['bear_scenario']}</div>
         </div>
         """,
         unsafe_allow_html=True,
