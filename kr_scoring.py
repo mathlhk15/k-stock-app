@@ -423,6 +423,135 @@ def calculate_scores(price_df, pbr_stats, quality_result,
     return {"score": score, "grade": grade, "reasons": reasons, "is_growth": is_growth}
 
 
+
+
+# ── 애널리스트 목표가 ──────────────────────────
+def get_analyst_data(symbol: str) -> dict:
+    try:
+        t = yf.Ticker(f"{symbol}.KS")
+        info = t.info or {}
+        result = {
+            "target_high":   info.get("targetHighPrice"),
+            "target_low":    info.get("targetLowPrice"),
+            "target_mean":   info.get("targetMeanPrice"),
+            "rec_key":       info.get("recommendationKey", ""),
+            "num_analysts":  info.get("numberOfAnalystOpinions"),
+            "strong_buy": 0, "buy": 0, "hold": 0,
+            "sell": 0, "strong_sell": 0,
+        }
+        try:
+            rec_df = t.recommendations_summary
+            if rec_df is not None and not rec_df.empty:
+                latest = rec_df.iloc[0]
+                result["strong_buy"]  = int(latest.get("strongBuy",  0) or 0)
+                result["buy"]         = int(latest.get("buy",         0) or 0)
+                result["hold"]        = int(latest.get("hold",        0) or 0)
+                result["sell"]        = int(latest.get("sell",        0) or 0)
+                result["strong_sell"] = int(latest.get("strongSell",  0) or 0)
+        except Exception:
+            pass
+        return result
+    except Exception:
+        return {}
+
+
+# ── 실적 서프라이즈 ───────────────────────────
+def get_earnings_surprise(symbol: str) -> list:
+    try:
+        t = yf.Ticker(f"{symbol}.KS")
+        hist = t.earnings_history
+        if hist is None or (hasattr(hist, "empty") and hist.empty):
+            return []
+        df = hist if isinstance(hist, pd.DataFrame) else pd.DataFrame(hist)
+        df = df.sort_index(ascending=False).head(4)
+        rows = []
+        for idx, row in df.iterrows():
+            eps_est    = row.get("epsEstimate")    or row.get("EPS Estimate")
+            eps_actual = row.get("epsActual")      or row.get("Reported EPS")
+            surprise   = row.get("epsDifference")  or row.get("Surprise(%)")
+            date_str   = str(idx)[:10] if idx else "N/A"
+            rows.append({
+                "date":       date_str,
+                "eps_est":    float(eps_est)    if eps_est    is not None and np.isfinite(float(eps_est))    else None,
+                "eps_actual": float(eps_actual) if eps_actual is not None and np.isfinite(float(eps_actual)) else None,
+                "surprise":   float(surprise)   if surprise   is not None and np.isfinite(float(surprise))   else None,
+            })
+        return [r for r in rows if r["eps_actual"] is not None or r["eps_est"] is not None]
+    except Exception:
+        return []
+
+
+# ── 섹터 동종업종 대비 성과 ───────────────────
+def get_sector_relative(symbol: str, market: str, listing_df: pd.DataFrame) -> dict:
+    """
+    같은 시장(KOSPI/KOSDAQ) + 같은 섹터 내 시가총액 상위 5개 종목과 수익률 비교
+    """
+    try:
+        # 현재 종목 섹터
+        info = yf.Ticker(f"{symbol}.KS").info or {}
+        sector = info.get("sector") or info.get("industry") or "N/A"
+        if sector == "N/A":
+            return {"available": False, "reason": "섹터 정보 없음"}
+
+        # 같은 시장 상위 종목 필터
+        sub = listing_df.copy()
+        if "Market" in sub.columns:
+            sub = sub[sub["Market"].str.upper() == market.upper()]
+        if "Marcap" in sub.columns:
+            sub = sub.sort_values("Marcap", ascending=False).head(50)
+
+        peers = []
+        for sym in sub["Symbol"].astype(str).tolist():
+            if sym == symbol:
+                continue
+            try:
+                _info = yf.Ticker(f"{sym}.KS").info or {}
+                _sec  = _info.get("sector") or _info.get("industry") or ""
+                if _sec == sector:
+                    peers.append(sym)
+                if len(peers) >= 5:
+                    break
+            except Exception:
+                continue
+
+        if not peers:
+            return {"available": False, "reason": "동종업종 비교 종목 없음"}
+
+        import FinanceDataReader as _fdr
+
+        def _ret(sym_, days):
+            try:
+                df_ = _fdr.DataReader(sym_)["Close"].dropna()
+                if len(df_) > days:
+                    return (float(df_.iloc[-1]) / float(df_.iloc[-days]) - 1) * 100
+            except Exception:
+                pass
+            return None
+
+        stock_r = {p: {d: _ret(symbol, d) for d in [21, 63, 126]} for p in ["stock"]}
+        stock_r = {d: _ret(symbol, d) for d in [21, 63, 126]}
+
+        peer_rets = {}
+        for d in [21, 63, 126]:
+            vals = [_ret(p, d) for p in peers]
+            vals = [v for v in vals if v is not None]
+            peer_rets[d] = sum(vals) / len(vals) if vals else None
+
+        return {
+            "available": True,
+            "sector": sector,
+            "peer_count": len(peers),
+            "stock_1m":  stock_r[21],  "peer_1m":  peer_rets[21],
+            "stock_3m":  stock_r[63],  "peer_3m":  peer_rets[63],
+            "stock_6m":  stock_r[126], "peer_6m":  peer_rets[126],
+            "rel_1m": (stock_r[21]  - peer_rets[21])  if stock_r[21]  is not None and peer_rets[21]  is not None else None,
+            "rel_3m": (stock_r[63]  - peer_rets[63])  if stock_r[63]  is not None and peer_rets[63]  is not None else None,
+            "rel_6m": (stock_r[126] - peer_rets[126]) if stock_r[126] is not None and peer_rets[126] is not None else None,
+        }
+    except Exception as e:
+        return {"available": False, "reason": str(e)}
+
+
 def build_analysis_payload(
     symbol, name, market, price_df,
     pbr_stats, funda_snapshot, quality_result, score_result,
