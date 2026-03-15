@@ -1,17 +1,12 @@
+"""
+kr_scoring.py  v5.0
+pykrx 완전 제거 → yfinance 기반 Quality/Supply 계산
+"""
 import numpy as np
 import pandas as pd
-from pykrx import stock
+import yfinance as yf
+import FinanceDataReader as fdr
 from datetime import datetime, timedelta
-
-
-def _get_last_trading_date() -> str:
-    """오늘이 주말/공휴일이면 가장 최근 거래일(평일)로 fallback"""
-    today = datetime.today()
-    for i in range(7):
-        d = today - timedelta(days=i)
-        if d.weekday() < 5:  # 월=0 ... 금=4
-            return d.strftime("%Y%m%d")
-    return today.strftime("%Y%m%d")
 
 
 def is_valid(v):
@@ -25,151 +20,116 @@ def percentile_rank(series: pd.Series, x: float) -> float:
     return float((s <= x).mean() * 100)
 
 
-def _rename_fundamental_columns(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or len(df) == 0:
-        return pd.DataFrame()
-
-    temp = df.copy()
-    rename_map = {
-        "티커": "Symbol",
-        "배당수익률": "DIV",
-        "주당배당금": "DPS",
-    }
-    temp = temp.rename(columns=rename_map)
-    return temp
+def _to_yf_symbol(symbol: str) -> str:
+    return f"{symbol}.KS"
 
 
-def _load_market_fundamental(today: str, market: str):
-    """pykrx market 파라미터 실패 시 전체 조회 fallback"""
+def _get_roe_from_yf(symbol: str) -> float | None:
+    """yfinance에서 ROE 가져오기"""
     try:
-        df = stock.get_market_fundamental_by_ticker(today, market=market)
-        if df is not None and len(df) > 0:
-            return df
-    except Exception:
-        pass
-    try:
-        df = stock.get_market_fundamental_by_ticker(today)
-        if df is not None and len(df) > 0:
-            return df
+        info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
+        roe = info.get("returnOnEquity")
+        if roe is not None and np.isfinite(float(roe)):
+            return float(roe)
     except Exception:
         pass
     return None
 
 
-def calculate_quality_score(symbol, market, listing_df):
+def _build_market_roe_table(listing_df: pd.DataFrame, market: str) -> pd.DataFrame:
     """
-    v4.3
-    - pykrx market 조회 실패 시 전체 조회 fallback
-    - 동일 시장 + 동일 섹터 우선
-    - 컬럼명 방어
+    listing_df의 Symbol 목록 중 시가총액 상위 100개에서
+    yfinance ROE를 가져와 비교 테이블 구성.
+    상위 100개만 조회해 속도를 제한.
     """
     try:
-        today = _get_last_trading_date()
-        df = _load_market_fundamental(today, market)
+        subset = listing_df.copy()
+        subset["Symbol"] = subset["Symbol"].astype(str)
 
-        if df is None or len(df) == 0:
+        # 시장 필터
+        if "Market" in subset.columns:
+            subset = subset[subset["Market"].str.upper() == market.upper()]
+
+        # 시가총액 기준 상위 100개
+        if "Marcap" in subset.columns:
+            subset = subset.sort_values("Marcap", ascending=False).head(100)
+        else:
+            subset = subset.head(100)
+
+        results = []
+        for sym in subset["Symbol"].tolist():
+            try:
+                info = yf.Ticker(f"{sym}.KS").info or {}
+                roe = info.get("returnOnEquity")
+                sector = info.get("sector") or info.get("industry") or "N/A"
+                if roe is not None:
+                    results.append({"Symbol": sym, "ROE": float(roe), "Sector": sector})
+            except Exception:
+                continue
+
+        if not results:
+            return pd.DataFrame(columns=["Symbol", "ROE", "Sector"])
+
+        return pd.DataFrame(results)
+
+    except Exception:
+        return pd.DataFrame(columns=["Symbol", "ROE", "Sector"])
+
+
+def calculate_quality_score(symbol, market, listing_df):
+    """
+    v5.0 — pykrx 제거, yfinance 기반
+    - 해당 종목 ROE를 시장 상위 100종목과 비교
+    """
+    try:
+        # 1. 해당 종목 ROE
+        current_roe = _get_roe_from_yf(symbol)
+
+        if current_roe is None:
             return {
                 "available": False,
                 "score": 0,
                 "roe": None,
                 "roe_percentile": None,
                 "sector": None,
-                "reason": "ROE 데이터 없음 (pykrx 응답 없음)",
+                "reason": "ROE 데이터 없음 (yfinance)",
             }
 
-        temp = _rename_fundamental_columns(df).reset_index()
+        # 2. 섹터 정보
+        try:
+            info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
+            sector = info.get("sector") or info.get("industry") or "N/A"
+        except Exception:
+            sector = "N/A"
 
-        # 첫 컬럼이 티커일 가능성 방어
-        if "Symbol" not in temp.columns:
-            temp = temp.rename(columns={temp.columns[0]: "Symbol"})
+        # 3. 시장 비교 테이블
+        market_table = _build_market_roe_table(listing_df, market)
 
-        temp["Symbol"] = temp["Symbol"].astype(str)
-
-        required_cols = ["BPS", "EPS"]
-        for col in required_cols:
-            if col not in temp.columns:
-                return {
-                    "available": False,
-                    "score": 0,
-                    "roe": None,
-                    "roe_percentile": None,
-                    "sector": None,
-                    "reason": f"필수 컬럼 없음: {list(temp.columns)}",
-                }
-
-        temp["BPS"] = pd.to_numeric(temp["BPS"], errors="coerce")
-        temp["EPS"] = pd.to_numeric(temp["EPS"], errors="coerce")
-        temp["ROE"] = np.where(
-            (temp["BPS"] > 0) & temp["EPS"].notna(),
-            temp["EPS"] / temp["BPS"],
-            np.nan,
-        )
-
-        listing = listing_df.copy()
-        listing["Symbol"] = listing["Symbol"].astype(str)
-
-        # FDR listing에는 Sector가 없을 수 있으므로 산업 대체 필드 준비
-        sector_col = None
-        for c in ["Sector", "Industry", "Dept", "Market"]:
-            if c in listing.columns:
-                sector_col = c
-                break
-
-        if sector_col is None:
-            listing["SectorProxy"] = "N/A"
-            sector_col = "SectorProxy"
-
-        merged = temp.merge(listing[["Symbol", sector_col]], on="Symbol", how="left")
-        merged = merged.rename(columns={sector_col: "SectorProxy"})
-
-        row = merged[merged["Symbol"] == str(symbol)]
-        if row.empty:
+        if len(market_table) < 5:
+            # 비교 표본 부족 시 단독 ROE로 절대 평가
+            if current_roe >= 0.15:
+                score = 20
+            elif current_roe >= 0.08:
+                score = 10
+            else:
+                score = 0
             return {
-                "available": False,
-                "score": 0,
-                "roe": None,
-                "roe_percentile": None,
-                "sector": None,
-                "reason": "종목 매칭 실패",
-            }
-
-        row = row.iloc[0]
-        sector = row.get("SectorProxy", None)
-        current_roe = row.get("ROE", np.nan)
-
-        if not is_valid(current_roe):
-            return {
-                "available": False,
-                "score": 0,
-                "roe": None,
+                "available": True,
+                "score": score,
+                "roe": current_roe,
                 "roe_percentile": None,
                 "sector": sector,
-                "reason": "ROE 계산 불가",
+                "reason": "비교 표본 부족 — 절대값 기준 평가",
             }
 
-        # 업종 peer 우선, 부족하면 시장 전체 fallback
-        peer = merged.copy()
-        if sector is not None and pd.notna(sector) and str(sector).strip() != "":
-            peer_sector = peer[peer["SectorProxy"] == sector]
-            peer_sector = peer_sector[pd.to_numeric(peer_sector["ROE"], errors="coerce").notna()]
+        # 섹터 peer 우선, 부족하면 전체 fallback
+        peer = market_table.copy()
+        if sector != "N/A":
+            peer_sector = peer[peer["Sector"] == sector]
             if len(peer_sector) >= 5:
                 peer = peer_sector
-            else:
-                peer = merged[pd.to_numeric(merged["ROE"], errors="coerce").notna()]
-        else:
-            peer = merged[pd.to_numeric(merged["ROE"], errors="coerce").notna()]
 
-        if len(peer) < 5:
-            return {
-                "available": False,
-                "score": 0,
-                "roe": None,
-                "roe_percentile": None,
-                "sector": sector,
-                "reason": "ROE 비교 표본 부족",
-            }
-
-        pct = percentile_rank(peer["ROE"], float(current_roe))
+        pct = percentile_rank(peer["ROE"], current_roe)
 
         if pct >= 90:
             score = 30
@@ -181,8 +141,8 @@ def calculate_quality_score(symbol, market, listing_df):
         return {
             "available": True,
             "score": score,
-            "roe": float(current_roe),
-            "roe_percentile": pct,
+            "roe": current_roe,
+            "roe_percentile": float(pct),
             "sector": sector,
             "reason": "",
         }
@@ -200,9 +160,9 @@ def calculate_quality_score(symbol, market, listing_df):
 
 def calculate_supply_score(investor_df):
     """
-    v4.2
-    - 컬럼 후보 확장
-    - 데이터 부족 시 reason 표시
+    v5.0
+    investor_df는 kr_data_price.py에서 yfinance 기관/외국인 대체 데이터로 채워짐.
+    빈 경우 N/A 처리.
     """
     try:
         if investor_df is None or len(investor_df) < 30:
@@ -211,17 +171,13 @@ def calculate_supply_score(investor_df):
                 "score": 0,
                 "supply_strength": None,
                 "supply_percentile": None,
-                "reason": "수급 데이터 부족",
+                "reason": "수급 데이터 없음 (pykrx 제거됨 — 추후 DART 연동 예정)",
             }
 
         flow = investor_df.copy()
 
-        foreign_candidates = [
-            "외국인합계", "외국인", "외국인계", "외국인투자자", "외국인투자자계"
-        ]
-        inst_candidates = [
-            "기관합계", "기관", "기관계", "기관투자자", "기관투자자계"
-        ]
+        foreign_candidates = ["외국인합계", "외국인", "외국인계", "외국인투자자"]
+        inst_candidates = ["기관합계", "기관", "기관계", "기관투자자"]
 
         foreign_col = next((c for c in foreign_candidates if c in flow.columns), None)
         inst_col = next((c for c in inst_candidates if c in flow.columns), None)
@@ -238,7 +194,6 @@ def calculate_supply_score(investor_df):
         flow["foreign"] = pd.to_numeric(flow[foreign_col], errors="coerce")
         flow["inst"] = pd.to_numeric(flow[inst_col], errors="coerce")
         flow["combined"] = flow["foreign"].fillna(0) + flow["inst"].fillna(0)
-
         flow["rolling20"] = flow["combined"].rolling(20).sum()
         dist = flow["rolling20"].dropna()
 
@@ -285,7 +240,6 @@ def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
 
     if pbr_stats.get("available"):
         z = pbr_stats.get("zscore")
-
         if z <= -1.5:
             score += 40
             reasons.append("Valuation +40")
@@ -343,25 +297,12 @@ def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
     if pbr_stats.get("sample_grade") == "Limited" and grade == "Strong Buy":
         grade = "Buy"
 
-    return {
-        "score": score,
-        "grade": grade,
-        "reasons": reasons,
-    }
+    return {"score": score, "grade": grade, "reasons": reasons}
 
 
-# 아래 build_analysis_payload는 기존 그대로 사용
 def build_analysis_payload(
-    symbol,
-    name,
-    market,
-    price_df,
-    investor_df,
-    pbr_stats,
-    funda_snapshot,
-    quality_result,
-    supply_result,
-    score_result,
+    symbol, name, market, price_df, investor_df,
+    pbr_stats, funda_snapshot, quality_result, supply_result, score_result,
 ):
     last = price_df.iloc[-1]
     prev = price_df.iloc[-2] if len(price_df) >= 2 else last
@@ -381,7 +322,6 @@ def build_analysis_payload(
     atr = last["ATR"]
 
     mdd = float(price_df["DRAWDOWN"].min() * 100) if "DRAWDOWN" in price_df.columns else None
-
     high_52 = float(price_df["High"].tail(252).max()) if len(price_df) >= 20 else float(price_df["High"].max())
     low_52 = float(price_df["Low"].tail(252).min()) if len(price_df) >= 20 else float(price_df["Low"].min())
 
@@ -413,34 +353,37 @@ def build_analysis_payload(
         volume_comment = "거래량이 20일 평균보다 낮아 움직임의 신뢰도는 다소 약할 수 있습니다."
 
     if is_valid(macd) and is_valid(macd_signal):
-        if macd > macd_signal:
-            macd_comment = "MACD가 시그널선 위에 있어 단기 모멘텀이 상대적으로 우위입니다."
-        else:
-            macd_comment = "MACD가 시그널선 아래에 있어 단기 모멘텀은 아직 약한 편입니다."
+        macd_comment = (
+            "MACD가 시그널선 위에 있어 단기 모멘텀이 상대적으로 우위입니다."
+            if macd > macd_signal
+            else "MACD가 시그널선 아래에 있어 단기 모멘텀은 아직 약한 편입니다."
+        )
     else:
         macd_comment = "MACD 해석을 위한 데이터가 충분하지 않습니다."
 
-    if is_valid(rsi) and rsi < 35:
-        short_strategy = "단기적으로는 과매도 인근 구간이라 기술적 반등 시도를 관찰할 수 있으나, 추격 매수보다 지지 확인이 우선입니다."
-    else:
-        short_strategy = "단기적으로는 현재가 추격보다 1차 지지 구간에서 눌림목 형성 여부를 확인하는 접근이 더 보수적입니다."
+    short_strategy = (
+        "단기적으로는 과매도 인근 구간이라 기술적 반등 시도를 관찰할 수 있으나, 추격 매수보다 지지 확인이 우선입니다."
+        if is_valid(rsi) and rsi < 35
+        else "단기적으로는 현재가 추격보다 1차 지지 구간에서 눌림목 형성 여부를 확인하는 접근이 더 보수적입니다."
+    )
 
-    if is_valid(ma120) and current_price > ma120:
-        mid_strategy = "중기적으로는 장기 추세선 위에 있어 조정 시 분할 관찰 전략이 유효할 수 있습니다."
-    else:
-        mid_strategy = "중기적으로는 장기 추세선 회복 여부를 먼저 확인하는 접근이 적절합니다."
+    mid_strategy = (
+        "중기적으로는 장기 추세선 위에 있어 조정 시 분할 관찰 전략이 유효할 수 있습니다."
+        if is_valid(ma120) and current_price > ma120
+        else "중기적으로는 장기 추세선 회복 여부를 먼저 확인하는 접근이 적절합니다."
+    )
 
-    if pbr_stats.get("available") and pbr_stats.get("zscore") is not None and pbr_stats["zscore"] <= -1.0:
-        bull_scenario = "현재 PBR이 역사 평균 대비 낮은 구간에 있어, 기술적 반등과 함께 재평가 시도가 나올 가능성을 열어둘 수 있습니다."
-    else:
-        bull_scenario = "추세가 개선되고 거래량이 동반되면 단기 저항선 테스트 이후 추가 상승 시도를 기대할 수 있습니다."
+    bull_scenario = (
+        "현재 PBR이 역사 평균 대비 낮은 구간에 있어, 기술적 반등과 함께 재평가 시도가 나올 가능성을 열어둘 수 있습니다."
+        if pbr_stats.get("available") and pbr_stats.get("zscore") is not None and pbr_stats["zscore"] <= -1.0
+        else "추세가 개선되고 거래량이 동반되면 단기 저항선 테스트 이후 추가 상승 시도를 기대할 수 있습니다."
+    )
 
     bear_scenario = "지지선 이탈 시에는 단기 조정 폭이 확대될 수 있으며, 장기선 회복 전까지는 보수적 접근이 필요합니다."
 
     flags = []
     z = pbr_stats.get("zscore")
     roe_pct = quality_result.get("roe_percentile")
-
     if is_valid(z) and is_valid(roe_pct):
         if z <= -1.5 and roe_pct >= 80:
             flags.append("★STRONG VALUE-UP★")
@@ -448,41 +391,22 @@ def build_analysis_payload(
             flags.append("★VALUE-UP★")
 
     return {
-        "symbol": symbol,
-        "name": name,
-        "market": market,
-        "current_price": current_price,
-        "pct_change": pct_change,
-        "score": score_result["score"],
-        "grade": score_result["grade"],
+        "symbol": symbol, "name": name, "market": market,
+        "current_price": current_price, "pct_change": pct_change,
+        "score": score_result["score"], "grade": score_result["grade"],
         "score_reasons": score_result["reasons"],
-        "pbr_stats": pbr_stats,
-        "funda_snapshot": funda_snapshot,
-        "quality_result": quality_result,
-        "supply_result": supply_result,
+        "pbr_stats": pbr_stats, "funda_snapshot": funda_snapshot,
+        "quality_result": quality_result, "supply_result": supply_result,
         "flags": flags,
-        "ma20": ma20,
-        "ma60": ma60,
-        "ma120": ma120,
-        "rsi": rsi,
-        "macd": macd,
-        "macd_signal": macd_signal,
-        "mdd": mdd,
-        "vol_ratio": vol_ratio,
-        "volume_comment": volume_comment,
-        "macd_comment": macd_comment,
-        "support_1": support_1,
-        "support_2": support_2,
-        "resistance_1": resistance_1,
-        "resistance_2": resistance_2,
-        "high_52": high_52,
-        "low_52": low_52,
-        "zone1_low": zone1_low,
-        "zone1_high": zone1_high,
-        "zone2_low": zone2_low,
-        "zone2_high": zone2_high,
-        "short_strategy": short_strategy,
-        "mid_strategy": mid_strategy,
-        "bull_scenario": bull_scenario,
-        "bear_scenario": bear_scenario,
+        "ma20": ma20, "ma60": ma60, "ma120": ma120,
+        "rsi": rsi, "macd": macd, "macd_signal": macd_signal,
+        "mdd": mdd, "vol_ratio": vol_ratio,
+        "volume_comment": volume_comment, "macd_comment": macd_comment,
+        "support_1": support_1, "support_2": support_2,
+        "resistance_1": resistance_1, "resistance_2": resistance_2,
+        "high_52": high_52, "low_52": low_52,
+        "zone1_low": zone1_low, "zone1_high": zone1_high,
+        "zone2_low": zone2_low, "zone2_high": zone2_high,
+        "short_strategy": short_strategy, "mid_strategy": mid_strategy,
+        "bull_scenario": bull_scenario, "bear_scenario": bear_scenario,
     }
