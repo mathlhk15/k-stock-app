@@ -1,7 +1,8 @@
-streamlit==1.39.0
+streamlit
 pandas
 numpy
 finance-datareader
 yfinance
 pykrx
 opendartreader
+pillow>=11.0.0
