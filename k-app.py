@@ -1,21 +1,20 @@
 import streamlit as st
 
 from kr_data_resolver import resolve_kr_symbol, load_krx_listing
-from kr_data_price import get_price_data, get_investor_flow_data
+from kr_data_price import get_price_data
 from kr_data_fundamental import build_pbr_statistics, get_basic_fundamental_snapshot
 from kr_indicators import add_technical_indicators
 from kr_scoring import (
     calculate_quality_score,
-    calculate_supply_score,
     calculate_scores,
     build_analysis_payload,
 )
 from kr_ui import render_full_report
 
 
-st.set_page_config(page_title="한국형 퀀트 주식 분석 엔진 v4.1", layout="wide")
+st.set_page_config(page_title="한국형 퀀트 주식 분석 엔진 v4.2", layout="wide")
 
-st.title("📊 한국형 퀀트 주식 분석 엔진 v5")
+st.title("📊 한국형 퀀트 주식 분석 엔진 v4.2")
 
 user_input = st.text_input("회사명 또는 종목코드 입력", "삼성전자")
 
@@ -28,13 +27,6 @@ if user_input:
 
     listing_df = load_krx_listing()
 
-    # ISU_CD 추출 (KRX API용 — 예: KR7005930003)
-    isu_cd = None
-    if "ISU_CD" in listing_df.columns:
-        row = listing_df[listing_df["Symbol"].astype(str) == symbol]
-        if len(row) > 0:
-            isu_cd = str(row.iloc[0]["ISU_CD"])
-
     price_df = get_price_data(symbol)
     if price_df.empty:
         st.error("가격 데이터가 부족합니다.")
@@ -42,24 +34,20 @@ if user_input:
 
     price_df = add_technical_indicators(price_df)
 
-    investor_df = get_investor_flow_data(symbol, isu_cd=isu_cd)
     pbr_stats = build_pbr_statistics(symbol, price_df)
     funda_snapshot = get_basic_fundamental_snapshot(symbol)
     quality_result = calculate_quality_score(symbol, market, listing_df)
-    supply_result = calculate_supply_score(investor_df)
 
-    score_result = calculate_scores(price_df, pbr_stats, quality_result, supply_result)
+    score_result = calculate_scores(price_df, pbr_stats, quality_result)
 
     analysis = build_analysis_payload(
         symbol=symbol,
         name=name,
         market=market,
         price_df=price_df,
-        investor_df=investor_df,
         pbr_stats=pbr_stats,
         funda_snapshot=funda_snapshot,
         quality_result=quality_result,
-        supply_result=supply_result,
         score_result=score_result,
     )
 
@@ -68,9 +56,7 @@ if user_input:
     with st.expander("디버그 데이터 확인"):
         st.write("pbr_stats", pbr_stats)
         st.write("quality_result", quality_result)
-        st.write("supply_result", supply_result)
         st.write("funda_snapshot", funda_snapshot)
-        st.write("investor_df columns", list(investor_df.columns) if investor_df is not None and not investor_df.empty else "N/A")
         st.write("listing_df columns", list(listing_df.columns) if listing_df is not None and not listing_df.empty else "N/A")
 
         st.markdown("---")
