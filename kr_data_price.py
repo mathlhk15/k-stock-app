@@ -41,7 +41,7 @@ def get_investor_flow_data(symbol):
         end = datetime.today()
         start = end - timedelta(days=370)
 
-        df = stock.get_market_trading_volume_by_investor(
+        df = stock.get_market_trading_value_by_investor(
             start.strftime("%Y%m%d"),
             end.strftime("%Y%m%d"),
             symbol,
