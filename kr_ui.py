@@ -1,5 +1,4 @@
 import streamlit as st
-import math
 
 
 def fmt_krw(v):
@@ -61,7 +60,7 @@ def card(title, value, desc=""):
 def render_full_report(a):
     st.markdown(f"## {a['name']} ({a['symbol']}) / {a['market']}")
 
-    # 상단 핵심 요약
+    # 상단 요약
     st.markdown("### 📌 핵심 요약")
     c1, c2, c3, c4 = st.columns(4)
 
@@ -69,16 +68,23 @@ def render_full_report(a):
         st.metric("현재 주가", fmt_krw(a["current_price"]), fmt_pct(a["pct_change"]))
 
     with c2:
-        pbr_val = a["pbr_stats"].get("current_pbr")
-        st.metric("현재 PBR", fmt_mul(pbr_val) if a["pbr_stats"].get("available") else "N/A")
+        st.metric(
+            "현재 PBR",
+            fmt_mul(a["pbr_stats"].get("current_pbr")) if a["pbr_stats"].get("available") else "N/A",
+        )
 
     with c3:
-        st.metric("점수", str(a["score"]))
+        roe = a["quality_result"].get("roe")
+        st.metric("ROE", fmt_pct(roe * 100 if roe is not None else None) if False else (f"{roe*100:.2f}%" if roe is not None else "N/A"))
 
     with c4:
         st.metric("등급", a["grade"])
 
-    # 1행 카드
+    # 플래그
+    if a["flags"]:
+        st.success(" | ".join(a["flags"]))
+
+    # 핵심 분석 카드
     st.markdown("### 📚 핵심 분석 카드")
     r1c1, r1c2 = st.columns(2)
 
@@ -88,6 +94,7 @@ def render_full_report(a):
                 f"평균 PBR {fmt_mul(a['pbr_stats'].get('mean_pbr'))}, "
                 f"표준편차 {fmt_num(a['pbr_stats'].get('std_pbr'), 3)}, "
                 f"Z-score {fmt_num(a['pbr_stats'].get('zscore'), 3)}, "
+                f"PBR 백분위 {fmt_pct(a['pbr_stats'].get('percentile'))}, "
                 f"표본 {a['pbr_stats'].get('sample_months')}개월 "
                 f"({a['pbr_stats'].get('sample_grade')})"
             )
@@ -97,33 +104,58 @@ def render_full_report(a):
 
     with r1c2:
         card(
+            "Quality",
+            f"ROE {a['quality_result']['roe']*100:.2f}%" if a["quality_result"].get("roe") is not None else "N/A",
+            (
+                f"시장 내 ROE 백분위 {fmt_pct(a['quality_result'].get('roe_percentile'))}, "
+                f"점수 {a['quality_result'].get('score', 0)}점"
+                if a["quality_result"].get("available")
+                else f"Quality 분석 불가: {a['quality_result'].get('reason', 'N/A')}"
+            ),
+        )
+
+    r2c1, r2c2 = st.columns(2)
+
+    with r2c1:
+        card(
+            "Supply",
+            fmt_num(a["supply_result"].get("supply_strength"), 0) if a["supply_result"].get("available") else "N/A",
+            (
+                f"최근 20일 수급 백분위 {fmt_pct(a['supply_result'].get('supply_percentile'))}, "
+                f"점수 {a['supply_result'].get('score', 0)}점"
+                if a["supply_result"].get("available")
+                else f"Supply 분석 불가: {a['supply_result'].get('reason', 'N/A')}"
+            ),
+        )
+
+    with r2c2:
+        card(
             "리스크(MDD)",
             fmt_pct(a["mdd"]),
             "최근 1년 구간 기준 최대 낙폭입니다. 장기 보유 시 감내 가능한 변동성 수준인지 점검할 필요가 있습니다.",
         )
 
-    # 2행 카드
-    r2c1, r2c2 = st.columns(2)
+    r3c1, r3c2 = st.columns(2)
 
-    with r2c1:
+    with r3c1:
+        trend_state = "정배열" if (a["ma20"] > a["ma60"] > a["ma120"]) else "혼조/역배열"
         trend_desc = (
             f"MA20 {fmt_krw(a['ma20'])} / "
             f"MA60 {fmt_krw(a['ma60'])} / "
             f"MA120 {fmt_krw(a['ma120'])}"
         )
-        card("추세", "정배열" if (a["ma20"] > a["ma60"] > a["ma120"]) else "혼조/역배열", trend_desc)
+        card("추세", trend_state, trend_desc)
 
-    with r2c2:
+    with r3c2:
         card("모멘텀", f"RSI {fmt_num(a['rsi'])}", a["macd_comment"])
 
-    # 3행 카드
-    r3c1, r3c2 = st.columns(2)
+    r4c1, r4c2 = st.columns(2)
 
-    with r3c1:
+    with r4c1:
         vol_text = fmt_num(a["vol_ratio"], 2) + "배" if a["vol_ratio"] is not None else "N/A"
         card("거래량 평가", vol_text, a["volume_comment"])
 
-    with r3c2:
+    with r4c2:
         score_reason = " / ".join(a["score_reasons"]) if a["score_reasons"] else "가산/감산 요인 없음"
         card("점수 근거", str(a["score"]), score_reason)
 
@@ -162,24 +194,8 @@ def render_full_report(a):
 
     # 전략
     st.markdown("### 🧭 투자 전략")
-    st.markdown(
-        f"""
-        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:14px;">
-            <div style="font-weight:800;font-size:18px;margin-bottom:8px;">단기 전략</div>
-            <div style="color:#475569;line-height:1.7;">{a['short_strategy']}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"""
-        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:14px;">
-            <div style="font-weight:800;font-size:18px;margin-bottom:8px;">중기 전략</div>
-            <div style="color:#475569;line-height:1.7;">{a['mid_strategy']}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    card("단기 전략", "1~2주", a["short_strategy"])
+    card("중기 전략", "1~3개월", a["mid_strategy"])
 
     # 시나리오
     st.markdown("### ⚖️ 시나리오 분석")
