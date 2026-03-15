@@ -1,98 +1,114 @@
+"""
+kr_data_fundamental.py  v5.0
+pykrx 완전 제거 → FinanceDataReader + yfinance 기반
+"""
 import numpy as np
 import pandas as pd
 import FinanceDataReader as fdr
-from pykrx import stock
+import yfinance as yf
 from datetime import datetime, timedelta
-
-
-def _get_last_trading_date() -> str:
-    """오늘이 주말/공휴일이면 가장 최근 거래일(평일)로 fallback"""
-    today = datetime.today()
-    for i in range(7):
-        d = today - timedelta(days=i)
-        if d.weekday() < 5:
-            return d.strftime("%Y%m%d")
-    return today.strftime("%Y%m%d")
 
 
 def is_valid(v):
     return v is not None and not pd.isna(v) and np.isfinite(v)
 
 
-def _rename_fundamental_columns(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or len(df) == 0:
-        return pd.DataFrame()
-
-    temp = df.copy()
-    rename_map = {
-        "티커": "Symbol",
-        "BPS": "BPS",
-        "PER": "PER",
-        "PBR": "PBR",
-        "EPS": "EPS",
-        "DIV": "DIV",
-        "DPS": "DPS",
-        "배당수익률": "DIV",
-        "주당배당금": "DPS",
-    }
-    temp = temp.rename(columns=rename_map)
-    return temp
+def _to_yf_symbol(symbol: str) -> str:
+    """KRX 6자리 코드 → yfinance 심볼 (005930 → 005930.KS)"""
+    return f"{symbol}.KS"
 
 
-def _get_pbr_from_fdr(symbol: str) -> pd.Series:
-    """
-    FinanceDataReader로 PBR 시계열 가져오기.
-    FDR의 DataReader는 일별 OHLCV만 반환하므로,
-    KRX 상장 종목 리스트의 PBR을 활용하거나
-    pykrx를 fallback으로 사용.
-    """
-    # 1차 시도: pykrx (빠른 네트워크 환경)
+def _get_yf_info(symbol: str) -> dict:
+    """yfinance로 현재 펀더멘털 스냅샷 가져오기"""
     try:
-        end = datetime.today()
-        start = end - timedelta(days=365 * 10 + 30)
-        funda = stock.get_market_fundamental_by_date(
-            start.strftime("%Y%m%d"),
-            end.strftime("%Y%m%d"),
-            symbol,
-            timeout=10,
-        )
-        if funda is not None and len(funda) > 0:
-            funda.index = pd.to_datetime(funda.index)
-            funda = _rename_fundamental_columns(funda)
-            if "PBR" in funda.columns:
-                pbr = pd.to_numeric(funda["PBR"], errors="coerce").dropna()
-                pbr = pbr[pbr > 0]
-                if len(pbr) > 0:
-                    return pbr, "pykrx"
+        ticker = yf.Ticker(_to_yf_symbol(symbol))
+        info = ticker.info or {}
+        return info
     except Exception:
-        pass
+        return {}
 
-    # 2차 시도: FDR DataReader (펀더멘털 지원 종목)
+
+def _get_yf_pbr_history(symbol: str) -> pd.Series:
+    """
+    yfinance로 분기별 PBR 시계열 구성.
+    book_value(BPS) + 주가 이용해 월별 PBR 추정.
+    """
     try:
-        df = fdr.DataReader(symbol)
-        if df is not None and "PBR" in df.columns:
-            df.index = pd.to_datetime(df.index)
-            pbr = pd.to_numeric(df["PBR"], errors="coerce").dropna()
-            pbr = pbr[pbr > 0]
-            if len(pbr) > 0:
-                return pbr, "fdr"
-    except Exception:
-        pass
+        yf_sym = _to_yf_symbol(symbol)
+        ticker = yf.Ticker(yf_sym)
 
-    return pd.Series(dtype=float), "NONE"
+        # 분기 재무제표에서 BPS 추출
+        bs = ticker.quarterly_balance_sheet
+        if bs is None or bs.empty:
+            return pd.Series(dtype=float)
+
+        # 보통주 자본 / 발행주식수 = BPS
+        equity_row = None
+        for row_name in ["Stockholders Equity", "Common Stock Equity", "Total Equity Gross Minority Interest"]:
+            if row_name in bs.index:
+                equity_row = bs.loc[row_name]
+                break
+
+        shares_row = None
+        info = ticker.info or {}
+        shares_out = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
+
+        if equity_row is None or shares_out is None or shares_out == 0:
+            return pd.Series(dtype=float)
+
+        equity_row = pd.to_numeric(equity_row, errors="coerce").dropna()
+        if len(equity_row) == 0:
+            return pd.Series(dtype=float)
+
+        # 분기말 날짜 → BPS 매핑
+        bps_series = equity_row / shares_out
+        bps_series.index = pd.to_datetime(bps_series.index)
+        bps_series = bps_series.sort_index()
+
+        # 주가 이력
+        hist = ticker.history(period="10y", interval="1mo")
+        if hist is None or hist.empty:
+            return pd.Series(dtype=float)
+
+        hist.index = pd.to_datetime(hist.index).tz_localize(None)
+        price_monthly = hist["Close"].resample("ME").last().dropna()
+
+        # BPS를 월별 price에 merge (forward fill)
+        bps_monthly = bps_series.resample("ME").last().reindex(price_monthly.index, method="ffill")
+
+        pbr = price_monthly / bps_monthly
+        pbr = pbr.dropna()
+        pbr = pbr[pbr > 0]
+        return pbr
+
+    except Exception:
+        return pd.Series(dtype=float)
 
 
 def build_pbr_statistics(symbol, price_df):
     """
-    v4.3 — pykrx 실패 시 FDR fallback
+    v5.0 — yfinance 기반 PBR 시계열 분석
     """
     try:
-        pbr_daily, source = _get_pbr_from_fdr(symbol)
+        pbr = _get_yf_pbr_history(symbol)
 
-        if len(pbr_daily) == 0:
+        if len(pbr) == 0:
+            # FDR DataReader fallback (일부 종목 지원)
+            try:
+                df = fdr.DataReader(symbol)
+                if df is not None and "PBR" in df.columns:
+                    df.index = pd.to_datetime(df.index)
+                    pbr_daily = pd.to_numeric(df["PBR"], errors="coerce").dropna()
+                    pbr_daily = pbr_daily[pbr_daily > 0]
+                    if len(pbr_daily) > 0:
+                        pbr = pbr_daily.resample("ME").last().dropna()
+            except Exception:
+                pass
+
+        if len(pbr) == 0:
             return {
                 "available": False,
-                "reason": "PBR 데이터 없음 (pykrx + FDR 모두 실패)",
+                "reason": "PBR 데이터 없음 (yfinance + FDR 모두 실패)",
                 "current_pbr": None,
                 "mean_pbr": None,
                 "std_pbr": None,
@@ -102,9 +118,6 @@ def build_pbr_statistics(symbol, price_df):
                 "percentile": None,
                 "source": "NONE",
             }
-
-        # 월말 리샘플링
-        pbr = pbr_daily.resample("ME").last().dropna()
 
         if len(pbr) < 36:
             return {
@@ -117,16 +130,14 @@ def build_pbr_statistics(symbol, price_df):
                 "sample_months": len(pbr),
                 "sample_grade": "Abort",
                 "percentile": None,
-                "source": source,
+                "source": "yfinance",
             }
 
         pbr = pbr.tail(120)
-
         current_pbr = float(pbr.iloc[-1])
         mean_pbr = float(pbr.mean())
         std_pbr = float(pbr.std(ddof=0))
         percentile = float((pbr <= current_pbr).mean() * 100)
-
         sample_months = len(pbr)
         sample_grade = "Full" if sample_months >= 60 else "Limited"
 
@@ -142,7 +153,7 @@ def build_pbr_statistics(symbol, price_df):
                 "sample_months": sample_months,
                 "sample_grade": sample_grade,
                 "percentile": percentile,
-                "source": source,
+                "source": "yfinance",
             }
 
         z = (current_pbr - mean_pbr) / std_pbr
@@ -157,7 +168,7 @@ def build_pbr_statistics(symbol, price_df):
             "sample_months": sample_months,
             "sample_grade": sample_grade,
             "percentile": percentile,
-            "source": source,
+            "source": "yfinance",
         }
 
     except Exception as e:
@@ -177,46 +188,27 @@ def build_pbr_statistics(symbol, price_df):
 
 def get_basic_fundamental_snapshot(symbol):
     """
-    v4.3 — pykrx 실패 시 FDR fallback
+    v5.0 — yfinance 기반 현재 펀더멘털 스냅샷
     """
-    # 1차: pykrx
     try:
-        today = _get_last_trading_date()
-        df = stock.get_market_fundamental_by_ticker(today)
+        info = _get_yf_info(symbol)
+        if not info:
+            return {}
 
-        if df is not None and len(df) > 0:
-            df = _rename_fundamental_columns(df)
+        bvps = info.get("bookValue")
+        eps = info.get("trailingEps") or info.get("forwardEps")
+        per = info.get("trailingPE") or info.get("forwardPE")
+        pbr = info.get("priceToBook")
+        div = info.get("dividendYield")
+        dps = info.get("lastDividendValue")
 
-            if symbol in df.index:
-                row = df.loc[symbol]
-            else:
-                temp = df.reset_index()
-                symbol_col = "Symbol" if "Symbol" in temp.columns else temp.columns[0]
-                hit = temp[temp[symbol_col].astype(str) == str(symbol)]
-                if len(hit) > 0:
-                    row = hit.iloc[0]
-                    return {
-                        "BPS": row.get("BPS", None),
-                        "PER": row.get("PER", None),
-                        "PBR": row.get("PBR", None),
-                        "EPS": row.get("EPS", None),
-                        "DIV": row.get("DIV", None),
-                        "DPS": row.get("DPS", None),
-                    }
+        return {
+            "BPS": float(bvps) if bvps is not None else None,
+            "PER": float(per) if per is not None else None,
+            "PBR": float(pbr) if pbr is not None else None,
+            "EPS": float(eps) if eps is not None else None,
+            "DIV": float(div * 100) if div is not None else None,
+            "DPS": float(dps) if dps is not None else None,
+        }
     except Exception:
-        pass
-
-    # 2차: FDR
-    try:
-        df2 = fdr.DataReader(symbol)
-        if df2 is not None and len(df2) > 0:
-            last = df2.iloc[-1]
-            result = {}
-            for col in ["BPS", "PER", "PBR", "EPS", "DIV", "DPS"]:
-                result[col] = float(last[col]) if col in last.index and pd.notna(last[col]) else None
-            if any(v is not None for v in result.values()):
-                return result
-    except Exception:
-        pass
-
-    return {}
+        return {}
