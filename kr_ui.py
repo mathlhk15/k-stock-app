@@ -222,3 +222,93 @@ def render_full_report(a):
             """,
             unsafe_allow_html=True,
         )
+
+    # 수급 차트
+    _render_investor_flow_chart(a.get("investor_df"))
+
+
+def _render_investor_flow_chart(investor_df):
+    """외국인 & 기관 매수금액 차트"""
+    import streamlit as st
+
+    st.markdown("### 📈 외국인 & 기관 수급")
+
+    if investor_df is None or (hasattr(investor_df, "empty") and investor_df.empty):
+        st.info("수급 데이터를 불러오지 못했습니다. KRX 서버 응답을 확인하세요.")
+        return
+
+    # 외국인 / 기관 컬럼 탐색
+    foreign_candidates = ["외국인합계", "외국인", "외국인계"]
+    inst_candidates    = ["기관합계", "기관", "기관계"]
+
+    foreign_col = next((c for c in foreign_candidates if c in investor_df.columns), None)
+    inst_col    = next((c for c in inst_candidates    if c in investor_df.columns), None)
+
+    if foreign_col is None or inst_col is None:
+        st.info(f"외국인/기관 컬럼을 찾을 수 없습니다. 컬럼: {list(investor_df.columns)}")
+        return
+
+    # 최근 100거래일만 표시
+    df = investor_df[[foreign_col, inst_col]].tail(100).copy()
+    df.columns = ["외국인", "기관"]
+
+    # 단위: 백만원
+    df = df / 1_000_000
+
+    import pandas as pd
+    # 20일 롤링 합계
+    df["외국인_20일"] = df["외국인"].rolling(20).sum()
+    df["기관_20일"]   = df["기관"].rolling(20).sum()
+
+    # 일별 Bar + 20일 Rolling Line 차트
+    import streamlit as st
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+
+    # 외국인 일별 막대
+    colors_foreign = ["#3b82f6" if v >= 0 else "#ef4444" for v in df["외국인"]]
+    fig.add_trace(go.Bar(
+        x=df.index, y=df["외국인"],
+        name="외국인 (일별)",
+        marker_color=colors_foreign,
+        opacity=0.5,
+        yaxis="y1",
+    ))
+
+    # 기관 일별 막대
+    colors_inst = ["#f97316" if v >= 0 else "#a855f7" for v in df["기관"]]
+    fig.add_trace(go.Bar(
+        x=df.index, y=df["기관"],
+        name="기관 (일별)",
+        marker_color=colors_inst,
+        opacity=0.5,
+        yaxis="y1",
+    ))
+
+    # 20일 누적 라인
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["외국인_20일"],
+        name="외국인 20일 누적",
+        line=dict(color="#1d4ed8", width=2),
+        yaxis="y1",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["기관_20일"],
+        name="기관 20일 누적",
+        line=dict(color="#c2410c", width=2),
+        yaxis="y1",
+    ))
+
+    fig.update_layout(
+        title="외국인 & 기관 매수금액 (단위: 백만원)",
+        barmode="group",
+        xaxis=dict(title="날짜"),
+        yaxis=dict(title="매수금액 (백만원)", zeroline=True, zerolinecolor="#94a3b8"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=420,
+        plot_bgcolor="#ffffff",
+        paper_bgcolor="#ffffff",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
