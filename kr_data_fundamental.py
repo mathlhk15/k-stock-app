@@ -481,11 +481,29 @@ def get_basic_fundamental_snapshot(symbol):
 
         # PBR/BPS (DART/FDR 모두 없을 때)
         if result["PBR"] is None or result["BPS"] is None:
-            shares = float(
+            # FDR 상장주식수 우선 (제미나이 제안: yfinance보다 정확)
+            fdr_shares = None
+            try:
+                _fdr_df = fdr.DataReader(symbol)
+                if _fdr_df is not None and not _fdr_df.empty and "Stocks" in _fdr_df.columns:
+                    fdr_shares = float(_fdr_df["Stocks"].dropna().iloc[-1])
+            except Exception:
+                pass
+
+            shares = fdr_shares or float(
                 info.get("sharesOutstanding")
                 or info.get("impliedSharesOutstanding") or 0
             )
-            current_price = float(
+            # FDR 현재가 우선
+            fdr_price = None
+            try:
+                _fdr_df2 = fdr.DataReader(symbol)
+                if _fdr_df2 is not None and not _fdr_df2.empty:
+                    fdr_price = float(_fdr_df2["Close"].iloc[-1])
+            except Exception:
+                pass
+
+            current_price = fdr_price or float(
                 info.get("currentPrice")
                 or info.get("regularMarketPrice") or 0
             )
