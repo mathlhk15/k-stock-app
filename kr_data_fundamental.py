@@ -288,7 +288,7 @@ def build_pbr_statistics(symbol, price_df):
             except Exception:
                 pass
 
-        # 3차: yfinance equity + 현재 주가 역산
+        # 3차: yfinance equity 연도별 시계열 → BPS → PBR
         if len(pbr) == 0:
             try:
                 info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
@@ -296,33 +296,57 @@ def build_pbr_statistics(symbol, price_df):
                     info.get("sharesOutstanding")
                     or info.get("impliedSharesOutstanding") or 0
                 )
-                current_price = float(
-                    info.get("currentPrice")
-                    or info.get("regularMarketPrice") or 0
-                )
-                # yfinance equity
-                ticker = yf.Ticker(_to_yf_symbol(symbol))
-                eq_series = {}
-                for bs in [ticker.quarterly_balance_sheet, ticker.balance_sheet]:
-                    if bs is None or bs.empty:
-                        continue
-                    for rn in ["Stockholders Equity", "Common Stock Equity"]:
-                        if rn in bs.index:
-                            row = pd.to_numeric(bs.loc[rn], errors="coerce").dropna()
-                            row.index = pd.to_datetime(row.index).tz_localize(None)
-                            for dt, v in row.items():
-                                eq_series[dt] = v
-                            break
 
-                if eq_series and shares > 0 and current_price > 0:
-                    eq_s = pd.Series(eq_series).sort_index()
-                    eq_latest = float(eq_s.iloc[-1])
-                    current_pbr_now = (current_price * shares) / eq_latest
-                    if 0.1 < current_pbr_now < 30:
-                        current_bps = current_price / current_pbr_now
-                        pbr = price_monthly / current_bps
-                        pbr = pbr[(pbr > 0) & (pbr < 50)]
-                        source = "yfinance-reverse"
+                if shares > 0:
+                    ticker = yf.Ticker(_to_yf_symbol(symbol))
+                    eq_series = {}
+                    for bs in [ticker.balance_sheet, ticker.quarterly_balance_sheet]:
+                        if bs is None or bs.empty:
+                            continue
+                        for rn in ["Stockholders Equity", "Common Stock Equity",
+                                   "Total Equity Gross Minority Interest"]:
+                            if rn in bs.index:
+                                row = pd.to_numeric(bs.loc[rn], errors="coerce").dropna()
+                                row.index = pd.to_datetime(row.index).tz_localize(None)
+                                for dt, v in row.items():
+                                    if pd.notna(v):
+                                        eq_series[dt] = v
+                                break
+
+                    if len(eq_series) >= 2:
+                        eq_s = pd.Series(eq_series).sort_index()
+                        bps_s = eq_s / shares
+                        # 단위 확인: BPS < 1000이면 달러 단위로 판단 → KRW 환산
+                        if bps_s.mean() < 1000:
+                            bps_s = bps_s * 1350
+                        # 연말 날짜로 정규화 → 월별 forward-fill
+                        bps_s.index = pd.to_datetime(
+                            [f"{d.year}-12-31" for d in bps_s.index]
+                        )
+                        bps_s = bps_s.sort_index()
+                        bps_monthly = bps_s.resample("ME").last().reindex(
+                            price_monthly.index, method="ffill"
+                        ).dropna()
+                        if len(bps_monthly) >= 12:
+                            pbr = price_monthly.reindex(bps_monthly.index) / bps_monthly
+                            pbr = pbr.dropna()
+                            pbr = pbr[(pbr > 0) & (pbr < 50)]
+                            source = "yfinance-equity-series"
+
+                    # 최후 수단: 최신 equity 1개로 역산
+                    if len(pbr) == 0 and eq_series:
+                        eq_latest = float(pd.Series(eq_series).sort_index().iloc[-1])
+                        current_price = float(
+                            info.get("currentPrice")
+                            or info.get("regularMarketPrice") or 0
+                        )
+                        if eq_latest > 0 and current_price > 0:
+                            current_bps = eq_latest / shares
+                            if current_bps < 1000:
+                                current_bps *= 1350
+                            pbr = price_monthly / current_bps
+                            pbr = pbr[(pbr > 0) & (pbr < 50)]
+                            source = "yfinance-reverse"
             except Exception:
                 pass
 
