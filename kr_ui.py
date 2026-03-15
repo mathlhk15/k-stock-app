@@ -159,6 +159,10 @@ def render_full_report(a):
             ("PBR  /  PER", f"{pbr_str}  /  {per_str}",
              f"PBR 백분위 {fmt_pct(a['pbr_stats'].get('percentile'))}",
              "#fff", "#e2e8f0", "#0f172a"),
+            ("BPS  /  DPS",
+             f"{fmt_krw(sh.get('bps'))}  /  {fmt_krw(sh.get('dps'))}",
+             "주당순자산 / 주당배당금",
+             "#fff", "#e2e8f0", "#0f172a"),
             ("ROE", roe_str,
              f"시장 백분위 {fmt_pct(a['quality_result'].get('roe_percentile'))}",
              "#fff", "#e2e8f0", "#0f172a"),
@@ -258,6 +262,33 @@ def render_full_report(a):
             beta_str = fmt_num(beta, 2) if beta is not None else "N/A"
             card("⚠️ Risk", f"Beta {beta_str}", "\n".join(ri_lines),
                  tooltip="Beta > 1 : 시장보다 변동 큼 / Sharpe > 1 : 양호한 위험 대비 수익.")
+
+    # 볼린저밴드
+    bb_pct  = a.get("bb_pct")
+    bb_upper = a.get("bb_upper")
+    bb_lower = a.get("bb_lower")
+    bb_mid   = a.get("bb_mid")
+    bb_width = a.get("bb_width")
+    if bb_pct is not None:
+        if bb_pct >= 100:
+            bb_pos = "상단 돌파 🔴"
+        elif bb_pct >= 80:
+            bb_pos = "상단 근접 ⚠️"
+        elif bb_pct <= 0:
+            bb_pos = "하단 이탈 🟢"
+        elif bb_pct <= 20:
+            bb_pos = "하단 근접 👀"
+        else:
+            bb_pos = "밴드 내 중립"
+        bb_desc = (
+            f"상단  {fmt_krw(bb_upper)}\n"
+            f"중간  {fmt_krw(bb_mid)}\n"
+            f"하단  {fmt_krw(bb_lower)}\n"
+            f"밴드폭  {fmt_num(bb_width, 1)}%  ·  위치  {fmt_num(bb_pct, 1)}%"
+        )
+        card("🎯 볼린저밴드", f"{bb_pos}  ({fmt_num(bb_pct,1)}%)",
+             bb_desc,
+             tooltip="밴드 위치 0~100%. 80%↑ 과매수 주의 / 20%↓ 과매도 반등 가능. 밴드폭 축소 후 확장 시 큰 움직임 예고.")
 
     # 6. 추세
     trend_state = "정배열 📈" if (a["ma20"] > a["ma60"] > a["ma120"]) else "혼조 / 역배열 📉"
