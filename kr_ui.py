@@ -156,7 +156,11 @@ def render_full_report(a):
             f"백분위 {fmt_pct(a['pbr_stats'].get('percentile'))}\n"
             f"표본 {a['pbr_stats'].get('sample_months')}개월 ({a['pbr_stats'].get('sample_grade')})"
         )
-        card("📊 Valuation", fmt_mul(a["pbr_stats"].get("current_pbr")), val_desc,
+        zscore = a["pbr_stats"].get("zscore")
+        zscore_str = fmt_num(zscore, 2) if zscore is not None else "N/A"
+        card("📊 Valuation",
+             f"PBR {fmt_mul(a['pbr_stats'].get('current_pbr'))}  ·  Z {zscore_str}",
+             val_desc,
              tooltip="Z-score ≤ −1 : 역사적 저평가 / ≥ +1 : 고평가. 백분위 낮을수록 과거 대비 저렴.")
     else:
         card("📊 Valuation", "N/A", f"분석 불가: {a['pbr_stats'].get('reason', '')}")
