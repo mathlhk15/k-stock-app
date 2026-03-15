@@ -1,13 +1,20 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 from pykrx import stock
 from datetime import datetime, timedelta
 
 
+def is_valid(v):
+    return v is not None and not pd.isna(v) and np.isfinite(v)
+
+
 def build_pbr_statistics(symbol, price_df):
     """
-    현재는 pykrx 월별 PBR 우선 사용.
-    추후 DART 정밀 버전으로 교체 가능.
+    v3 안정형:
+    pykrx 월별 PBR 사용
+    - 최근 최대 120개월
+    - 최소 36개월
+    - 60개월 이상 Full / 36~59개월 Limited
     """
     try:
         end = datetime.today()
@@ -102,6 +109,9 @@ def build_pbr_statistics(symbol, price_df):
 
 
 def get_basic_fundamental_snapshot(symbol):
+    """
+    현재 스냅샷용 기본 펀더멘털
+    """
     try:
         today = datetime.today().strftime("%Y%m%d")
         df = stock.get_market_fundamental_by_ticker(today)
