@@ -20,7 +20,7 @@ from kr_ui import render_full_report
 
 st.set_page_config(page_title="꾀의 주식 분석", layout="centered")
 
-st.title("📊 꾀의 주식 분석")
+st.title("📊 뀨의 주식 분석")
 
 # ── session_state 초기화 ──
 if "favorites" not in st.session_state:
