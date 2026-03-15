@@ -81,5 +81,20 @@ if user_input:
             st.markdown("#### quarterly_balance_sheet index")
             _bs = yf.Ticker(f"{symbol}.KS").quarterly_balance_sheet
             st.write(list(_bs.index) if _bs is not None and not _bs.empty else "없음")
+
+            st.markdown("#### annual Stockholders Equity 시계열")
+            _t2 = yf.Ticker(f"{symbol}.KS")
+            _ann = _t2.balance_sheet
+            if _ann is not None and not _ann.empty and "Stockholders Equity" in _ann.index:
+                st.write(_ann.loc["Stockholders Equity"].to_dict())
+            else:
+                st.write("없음")
+
+            st.markdown("#### quarterly Stockholders Equity 시계열")
+            _qtr = _t2.quarterly_balance_sheet
+            if _qtr is not None and not _qtr.empty and "Stockholders Equity" in _qtr.index:
+                st.write(_qtr.loc["Stockholders Equity"].to_dict())
+            else:
+                st.write("없음")
         except Exception as _e:
             st.write(f"yfinance raw 조회 실패: {_e}")
