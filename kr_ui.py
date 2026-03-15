@@ -41,6 +41,7 @@ def _grade_color(grade):
     return {
         "Strong Buy": ("#dcfce7", "#166534", "#16a34a"),
         "Buy":        ("#dbeafe", "#1e3a8a", "#2563eb"),
+        "Growth":     ("#f3e8ff", "#5b21b6", "#7c3aed"),  # 보라색 — 성장주 특수 등급
         "Hold":       ("#fef9c3", "#713f12", "#ca8a04"),
         "Caution":    ("#ffedd5", "#7c2d12", "#ea580c"),
         "Avoid":      ("#fee2e2", "#7f1d1d", "#dc2626"),
@@ -145,7 +146,8 @@ def render_full_report(a):
         f'<div style="font-size:30px;font-weight:900;color:{fg};line-height:1.1;">{score}점</div></div>'
         f'</div>'
         f'<div style="font-size:12px;color:{fg};opacity:0.85;border-top:1px solid {border};padding-top:10px;line-height:1.6;">{score_reason}</div>'
-        f'</div>',
+        + (f'<div style="font-size:11px;color:{fg};opacity:0.7;margin-top:6px;">🌱 성장주 등급: 고PBR이지만 강한 모멘텀·우량 ROE·PEG&lt;1로 성장이 밸류를 정당화하는 구간</div>' if a["grade"] == "Growth" else '')
+        + f'</div>',
         unsafe_allow_html=True,
     )
 
