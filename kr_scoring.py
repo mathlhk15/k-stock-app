@@ -371,11 +371,11 @@ def calculate_scores(price_df, pbr_stats, quality_result,
     if is_valid(rsi) and rsi >= 50:
         score += 5; reasons.append("RSI>=50 +5")
 
-    if score >= 80:   grade = "Strong Buy"
-    elif score >= 65: grade = "Buy"
-    elif score >= 50: grade = "Hold"
-    elif score >= 35: grade = "Caution"
-    else:             grade = "Avoid"
+    if score >= 80:   grade = "강한 매수"
+    elif score >= 65: grade = "매수"
+    elif score >= 50: grade = "보류"
+    elif score >= 35: grade = "주의"
+    else:             grade = "회피"
 
     if not pbr_stats.get("available") and grade in ["Strong Buy", "Buy"]:
         grade = "Hold"
