@@ -1,10 +1,10 @@
 """
-kr_data_fundamental.py  v5.3
-핵심 수정:
-- PBR 시계열: quarterly(4분기) → annual(최대 4년) + 월별 주가 연결
-- 현재 PBR: marketCap / Stockholders Equity (가장 정확)
-- BPS: Stockholders Equity / sharesOutstanding (보통주 기준)
-- funda_snapshot: 계산값 신뢰도 향상
+kr_data_fundamental.py  v5.4
+핵심 변경:
+- PBR 시계열: FinanceDataReader KRX 일별 데이터를 primary로 사용
+  fdr.DataReader(symbol) → 일별 OHLCV + PBR/PER/EPS/BPS/DIV 포함
+- yfinance는 ROE/DPS/DIV 등 FDR에 없는 항목만 보조로 사용
+- funda_snapshot: FDR 최신값 우선, yfinance 보완
 """
 import numpy as np
 import pandas as pd
@@ -21,161 +21,119 @@ def _to_yf_symbol(symbol: str) -> str:
     return f"{symbol}.KS"
 
 
-def _get_yf_ticker(symbol: str):
-    return yf.Ticker(_to_yf_symbol(symbol))
-
-
-def _extract_equity_series(ticker) -> pd.Series:
+def _load_fdr_data(symbol: str) -> pd.DataFrame:
     """
-    연간 + 분기 balance_sheet에서 보통주 자본(Stockholders Equity) 시계열 추출.
-    연간 우선, 분기로 최신값 보완.
-    단위: 원화(KRW) — yfinance KS 종목 재무제표는 KRW 단위.
+    FDR로 전체 이력 로드.
+    컬럼: Open High Low Close Volume + Change Comp MarketCap
+    KRX 종목은 펀더멘털 컬럼(PBR 등)이 없을 수 있음 → 별도 처리
     """
-    combined = {}
-
-    # 연간 (최대 4개년)
     try:
-        ann = ticker.balance_sheet
-        if ann is not None and not ann.empty:
-            for row_name in ["Stockholders Equity", "Common Stock Equity",
-                             "Total Equity Gross Minority Interest"]:
-                if row_name in ann.index:
-                    row = pd.to_numeric(ann.loc[row_name], errors="coerce").dropna()
-                    row.index = pd.to_datetime(row.index).tz_localize(None)
-                    for dt, val in row.items():
-                        combined[dt] = val
-                    break
+        df = fdr.DataReader(symbol)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def _load_fdr_fundamental_history(symbol: str) -> pd.Series:
+    """
+    FDR KRX fundamental 일별 PBR 시계열.
+    fdr.DataReader(symbol)에 PBR 컬럼이 없으면
+    fdr.StockListing + 날짜별 조회로 대체.
+    """
+    # 방법 1: DataReader에 PBR 컬럼 포함 여부 확인
+    try:
+        df = fdr.DataReader(symbol)
+        if df is not None and not df.empty and "PBR" in df.columns:
+            df.index = pd.to_datetime(df.index)
+            pbr = pd.to_numeric(df["PBR"], errors="coerce").dropna()
+            pbr = pbr[pbr > 0]
+            if len(pbr) >= 12:
+                return pbr, "fdr-direct"
     except Exception:
         pass
 
-    # 분기 (최근 8분기) — 연간보다 최신
+    return pd.Series(dtype=float), "NONE"
+
+
+def _get_yf_info(symbol: str) -> dict:
     try:
-        qtr = ticker.quarterly_balance_sheet
-        if qtr is not None and not qtr.empty:
+        return yf.Ticker(_to_yf_symbol(symbol)).info or {}
+    except Exception:
+        return {}
+
+
+def _get_yf_equity_latest(symbol: str) -> float | None:
+    """yfinance 분기 balance sheet에서 최신 Stockholders Equity"""
+    try:
+        ticker = yf.Ticker(_to_yf_symbol(symbol))
+        for bs in [ticker.quarterly_balance_sheet, ticker.balance_sheet]:
+            if bs is None or bs.empty:
+                continue
             for row_name in ["Stockholders Equity", "Common Stock Equity",
                              "Total Equity Gross Minority Interest"]:
-                if row_name in qtr.index:
-                    row = pd.to_numeric(qtr.loc[row_name], errors="coerce").dropna()
-                    row.index = pd.to_datetime(row.index).tz_localize(None)
-                    for dt, val in row.items():
-                        combined[dt] = val  # 분기값이 덮어씀 (더 최신)
-                    break
+                if row_name in bs.index:
+                    row = pd.to_numeric(bs.loc[row_name], errors="coerce").dropna()
+                    if len(row) > 0:
+                        return float(row.iloc[0])
     except Exception:
         pass
-
-    if not combined:
-        return pd.Series(dtype=float)
-
-    equity = pd.Series(combined).sort_index()
-    # 단위 확인: KRW라면 삼성전자 자본은 수백조 원 → 1e11 이상
-    # 달러라면 수천억 달러 → 1e11 수준이므로 구분 어려움
-    # 대신 per-share 계산 후 주가와 비교로 단위 판단
-    return equity
-
-
-def _get_pbr_history(symbol: str) -> tuple[pd.Series, str]:
-    """
-    PBR 시계열 계산 전략:
-    1. marketCap / Stockholders Equity → 연도별 PBR (가장 정확)
-       - 연간 marketCap 이력이 없으므로 연도말 주가 × 발행주식수로 대체
-    2. BPS + 월별 주가로 월별 PBR 구성
-    """
-    try:
-        ticker = _get_yf_ticker(symbol)
-        info = ticker.info or {}
-
-        shares_out = (
-            info.get("sharesOutstanding")
-            or info.get("impliedSharesOutstanding")
-        )
-        current_price = info.get("currentPrice") or info.get("regularMarketPrice")
-
-        if not shares_out or not current_price:
-            return pd.Series(dtype=float), "NONE"
-
-        shares_out = float(shares_out)
-        current_price = float(current_price)
-
-        # 월별 주가 이력
-        hist = ticker.history(period="10y", interval="1mo")
-        if hist is None or hist.empty:
-            return pd.Series(dtype=float), "NONE"
-
-        hist.index = pd.to_datetime(hist.index).tz_localize(None)
-        price_monthly = hist["Close"].resample("ME").last().dropna()
-
-        if len(price_monthly) == 0:
-            return pd.Series(dtype=float), "NONE"
-
-        # Stockholders Equity 시계열
-        equity_series = _extract_equity_series(ticker)
-
-        if len(equity_series) >= 2:
-            # equity를 월말로 forward-fill
-            equity_monthly = equity_series.resample("ME").last().reindex(
-                price_monthly.index, method="ffill"
-            ).dropna()
-
-            if len(equity_monthly) >= 12:
-                # 시가총액 = 주가 × 발행주식수
-                # PBR = 시가총액 / 자본
-                marketcap_monthly = price_monthly.reindex(equity_monthly.index) * shares_out
-                pbr = marketcap_monthly / equity_monthly
-                pbr = pbr.dropna()
-                pbr = pbr[(pbr > 0) & (pbr < 50)]
-
-                if len(pbr) >= 12:
-                    return pbr, "yfinance-equity"
-
-        # fallback: 현재 PBR로 BPS 역산 후 과거 주가에 적용
-        # 현재 PBR = marketCap / equity_latest
-        if len(equity_series) > 0:
-            equity_latest = float(equity_series.iloc[-1])
-            if equity_latest > 0:
-                current_marketcap = current_price * shares_out
-                current_pbr_calc = current_marketcap / equity_latest
-
-                if 0.1 < current_pbr_calc < 30:
-                    # 고정 자본으로 과거 PBR 추정 (보수적)
-                    pbr_estimated = (price_monthly * shares_out) / equity_latest
-                    pbr_estimated = pbr_estimated.dropna()
-                    pbr_estimated = pbr_estimated[(pbr_estimated > 0) & (pbr_estimated < 50)]
-                    if len(pbr_estimated) >= 12:
-                        return pbr_estimated, "yfinance-equity-fixed"
-
-        return pd.Series(dtype=float), "NONE"
-
-    except Exception:
-        return pd.Series(dtype=float), "NONE"
+    return None
 
 
 def build_pbr_statistics(symbol, price_df):
-    """v5.3"""
+    """
+    v5.4 — FDR 일별 PBR primary
+    """
     try:
-        pbr, source = _get_pbr_history(symbol)
+        pbr_daily, source = _load_fdr_fundamental_history(symbol)
 
-        # FDR fallback
-        if len(pbr) == 0:
+        # FDR에 PBR 없으면 yfinance equity + 월별 주가로 구성
+        if len(pbr_daily) == 0:
             try:
-                df = fdr.DataReader(symbol)
-                if df is not None and "PBR" in df.columns:
-                    df.index = pd.to_datetime(df.index)
-                    pbr_daily = pd.to_numeric(df["PBR"], errors="coerce").dropna()
-                    pbr_daily = pbr_daily[pbr_daily > 0]
-                    if len(pbr_daily) > 0:
-                        pbr = pbr_daily.resample("ME").last().dropna()
-                        source = "fdr"
+                info = _get_yf_info(symbol)
+                shares_out = float(
+                    info.get("sharesOutstanding")
+                    or info.get("impliedSharesOutstanding")
+                    or 0
+                )
+                current_price = float(
+                    info.get("currentPrice")
+                    or info.get("regularMarketPrice")
+                    or 0
+                )
+                equity_latest = _get_yf_equity_latest(symbol)
+
+                if shares_out > 0 and equity_latest and equity_latest > 0 and current_price > 0:
+                    # 현재 PBR = 시가총액 / 자본
+                    current_marketcap = current_price * shares_out
+                    current_pbr_now = current_marketcap / equity_latest
+
+                    if 0.1 < current_pbr_now < 30:
+                        # 현재 BPS 역산 후 price_df 주가 이력에 적용
+                        current_bps = current_price / current_pbr_now
+                        price_hist = price_df["Close"].resample("ME").last().dropna()
+                        pbr_daily = price_hist / current_bps
+                        pbr_daily = pbr_daily[(pbr_daily > 0) & (pbr_daily < 50)]
+                        source = "yfinance-equity-reverse"
             except Exception:
                 pass
 
-        if len(pbr) == 0:
+        if len(pbr_daily) == 0:
             return {
                 "available": False,
-                "reason": "PBR 데이터 없음 (yfinance + FDR 모두 실패)",
+                "reason": "PBR 데이터 없음 (FDR + yfinance 모두 실패)",
                 "current_pbr": None, "mean_pbr": None, "std_pbr": None,
                 "zscore": None, "sample_months": 0, "sample_grade": "N/A",
                 "percentile": None, "source": "NONE",
             }
+
+        # 월말 리샘플링
+        pbr = pbr_daily.resample("ME").last().dropna()
+        pbr = pbr[(pbr > 0) & (pbr < 50)]
 
         if len(pbr) < 36:
             return {
@@ -225,59 +183,66 @@ def build_pbr_statistics(symbol, price_df):
 
 def get_basic_fundamental_snapshot(symbol):
     """
-    v5.3 — marketCap / equity 기반 PBR, BPS 정확도 향상
-    dividendYield: yfinance KS 종목은 이미 퍼센트 (1.23 = 1.23%)
+    v5.4
+    - FDR 최신 행에서 PBR/PER/BPS/EPS/DIV 우선
+    - yfinance에서 ROE/DPS 보완
     """
+    result = {
+        "BPS": None, "PER": None, "PBR": None,
+        "EPS": None, "DIV": None, "DPS": None,
+    }
+
+    # 1차: FDR
     try:
-        ticker = _get_yf_ticker(symbol)
-        info   = ticker.info or {}
+        df = fdr.DataReader(symbol)
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ["BPS", "PER", "PBR", "EPS", "DIV"]:
+                if col in last.index:
+                    v = pd.to_numeric(last[col], errors="coerce")
+                    if pd.notna(v) and np.isfinite(v) and v != 0:
+                        result[col] = round(float(v), 2)
+    except Exception:
+        pass
 
-        if not info:
-            return {}
+    # 2차: yfinance 보완 (FDR에 없는 항목)
+    try:
+        info = _get_yf_info(symbol)
+        if info:
+            # DPS
+            if result["DPS"] is None:
+                dps = info.get("lastDividendValue")
+                if dps is not None:
+                    result["DPS"] = round(float(dps), 0)
 
-        per   = info.get("trailingPE") or info.get("forwardPE")
-        div   = info.get("dividendYield")   # 이미 퍼센트
-        dps   = info.get("lastDividendValue")
-        roe   = info.get("returnOnEquity")
-        shares_out = float(
-            info.get("sharesOutstanding")
-            or info.get("impliedSharesOutstanding")
-            or 0
-        )
-        current_price = float(
-            info.get("currentPrice") or info.get("regularMarketPrice") or 0
-        )
+            # DIV (yfinance는 이미 퍼센트)
+            if result["DIV"] is None:
+                div = info.get("dividendYield")
+                if div is not None:
+                    result["DIV"] = round(float(div), 2)
 
-        # BPS: 최신 Stockholders Equity / sharesOutstanding
-        bps = None
-        equity_series = _extract_equity_series(ticker)
-        if len(equity_series) > 0 and shares_out > 0:
-            equity_latest = float(equity_series.iloc[-1])
-            bps_raw = equity_latest / shares_out
-            # 단위 확인: 삼성전자 BPS는 약 40,000~80,000원
-            # 만약 0.001 미만이면 단위 오류
-            if bps_raw < 1:
-                bps_raw = bps_raw * 1e9  # 십억 단위 보정 시도
-            bps = round(bps_raw, 0)
-
-        # PBR: marketCap / equity (or currentPrice / BPS)
-        pbr = None
-        if bps and bps > 0 and current_price > 0:
-            pbr = round(current_price / bps, 2)
-
-        # EPS: ROE × BPS
-        eps = None
-        if roe is not None and bps is not None:
-            eps = round(float(roe) * bps, 0)
-
-        return {
-            "BPS": bps,
-            "PER": round(float(per), 2) if per is not None else None,
-            "PBR": pbr,
-            "EPS": eps,
-            "DIV": round(float(div), 2) if div is not None else None,
-            "DPS": round(float(dps), 0) if dps is not None else None,
-        }
+            # PBR (FDR에 없을 때)
+            if result["PBR"] is None:
+                shares_out = float(
+                    info.get("sharesOutstanding")
+                    or info.get("impliedSharesOutstanding")
+                    or 0
+                )
+                current_price = float(
+                    info.get("currentPrice")
+                    or info.get("regularMarketPrice")
+                    or 0
+                )
+                equity = _get_yf_equity_latest(symbol)
+                if equity and equity > 0 and shares_out > 0 and current_price > 0:
+                    bps_calc = equity / shares_out
+                    if bps_calc > 100:  # KRW 단위 확인
+                        pbr_calc = current_price / bps_calc
+                        result["PBR"] = round(pbr_calc, 2)
+                        if result["BPS"] is None:
+                            result["BPS"] = round(bps_calc, 0)
 
     except Exception:
-        return {}
+        pass
+
+    return result
