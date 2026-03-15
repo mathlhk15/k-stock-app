@@ -65,3 +65,21 @@ if user_input:
         st.write("funda_snapshot", funda_snapshot)
         st.write("investor_df columns", list(investor_df.columns) if investor_df is not None and not investor_df.empty else "N/A")
         st.write("listing_df columns", list(listing_df.columns) if listing_df is not None and not listing_df.empty else "N/A")
+
+        st.markdown("---")
+        st.markdown("#### yfinance raw info (주요 필드)")
+        try:
+            import yfinance as yf
+            _info = yf.Ticker(f"{symbol}.KS").info or {}
+            _keys = [
+                "priceToBook", "bookValue", "trailingEps", "forwardEps",
+                "trailingPE", "dividendYield", "lastDividendValue",
+                "currentPrice", "regularMarketPrice", "returnOnEquity",
+                "sharesOutstanding", "impliedSharesOutstanding",
+            ]
+            st.write({k: _info.get(k) for k in _keys})
+            st.markdown("#### quarterly_balance_sheet index")
+            _bs = yf.Ticker(f"{symbol}.KS").quarterly_balance_sheet
+            st.write(list(_bs.index) if _bs is not None and not _bs.empty else "없음")
+        except Exception as _e:
+            st.write(f"yfinance raw 조회 실패: {_e}")
