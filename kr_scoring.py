@@ -408,14 +408,14 @@ def calculate_scores(price_df, pbr_stats, quality_result,
         and peg_val is not None and peg_val < 1.0
     )
 
-    if score >= 80:   grade = "Strong Buy"
-    elif score >= 65: grade = "Buy"
+    if score >= 80:   grade = "강한 매수"
+    elif score >= 65: grade = "매수"
     elif score >= 50:
-        grade = "Growth" if is_growth else "Hold"
+        grade = "Growth" if is_growth else "보류"
     elif score >= 35:
-        grade = "Growth" if is_growth else "Caution"
+        grade = "Growth" if is_growth else "주의"
     elif score >= 20:
-        grade = "Growth" if is_growth else "Avoid"
+        grade = "Growth" if is_growth else "회피"
     else:
         grade = "Avoid"
 
