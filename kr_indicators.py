@@ -36,3 +36,14 @@ def add_technical_indicators(df):
     df["DRAWDOWN"] = df["Close"] / roll_max - 1.0
 
     return df
+
+def add_bollinger_bands(df, window=20, num_std=2):
+    df = df.copy()
+    rolling = df["Close"].rolling(window)
+    df["BB_MID"]   = rolling.mean()
+    df["BB_STD"]   = rolling.std(ddof=0)
+    df["BB_UPPER"] = df["BB_MID"] + num_std * df["BB_STD"]
+    df["BB_LOWER"] = df["BB_MID"] - num_std * df["BB_STD"]
+    df["BB_WIDTH"] = (df["BB_UPPER"] - df["BB_LOWER"]) / df["BB_MID"] * 100
+    df["BB_PCT"]   = (df["Close"] - df["BB_LOWER"]) / (df["BB_UPPER"] - df["BB_LOWER"]) * 100
+    return df
