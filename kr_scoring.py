@@ -440,4 +440,5 @@ def build_analysis_payload(
         "zone2_low": zone2_low, "zone2_high": zone2_high,
         "short_strategy": short_strategy, "mid_strategy": mid_strategy,
         "bull_scenario": bull_scenario, "bear_scenario": bear_scenario,
+        "investor_df": investor_df,
     }
