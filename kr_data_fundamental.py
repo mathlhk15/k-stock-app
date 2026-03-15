@@ -4,6 +4,16 @@ from pykrx import stock
 from datetime import datetime, timedelta
 
 
+def _get_last_trading_date() -> str:
+    """오늘이 주말/공휴일이면 가장 최근 거래일(평일)로 fallback"""
+    today = datetime.today()
+    for i in range(7):
+        d = today - timedelta(days=i)
+        if d.weekday() < 5:
+            return d.strftime("%Y%m%d")
+    return today.strftime("%Y%m%d")
+
+
 def is_valid(v):
     return v is not None and not pd.isna(v) and np.isfinite(v)
 
@@ -168,7 +178,7 @@ def build_pbr_statistics(symbol, price_df):
 
 def get_basic_fundamental_snapshot(symbol):
     try:
-        today = datetime.today().strftime("%Y%m%d")
+        today = _get_last_trading_date()
         df = stock.get_market_fundamental_by_ticker(today)
 
         if df is None or len(df) == 0:
