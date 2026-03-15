@@ -315,13 +315,28 @@ def build_pbr_statistics(symbol, price_df):
 
                     if len(eq_series) >= 2:
                         eq_s = pd.Series(eq_series).sort_index()
+
+                        # 미래 날짜 제거 (yfinance가 미래 날짜로 반환하는 버그 대응)
+                        today = pd.Timestamp.today().normalize()
+                        eq_s = eq_s[eq_s.index <= today]
+
+                        if len(eq_s) == 0:
+                            # 미래 날짜만 있으면 가장 최근 값을 오늘 날짜로 당겨서 사용
+                            eq_s = pd.Series(eq_series).sort_index()
+                            eq_s.index = [today - pd.DateOffset(months=3)
+                                          if i == len(eq_series) - 1
+                                          else d
+                                          for i, d in enumerate(eq_s.index)]
+
                         bps_s = eq_s / shares
                         # 단위 확인: BPS < 1000이면 달러 단위로 판단 → KRW 환산
                         if bps_s.mean() < 1000:
                             bps_s = bps_s * 1350
                         # 연말 날짜로 정규화 → 월별 forward-fill
                         bps_s.index = pd.to_datetime(
-                            [f"{d.year}-12-31" for d in bps_s.index]
+                            [f"{d.year}-12-31" if d.month == 12
+                             else f"{d.year}-{d.month:02d}-{d.day:02d}"
+                             for d in bps_s.index]
                         )
                         bps_s = bps_s.sort_index()
                         bps_monthly = bps_s.resample("ME").last().reindex(
@@ -331,7 +346,8 @@ def build_pbr_statistics(symbol, price_df):
                             pbr = price_monthly.reindex(bps_monthly.index) / bps_monthly
                             pbr = pbr.dropna()
                             pbr = pbr[(pbr > 0) & (pbr < 50)]
-                            source = "yfinance-equity-series"
+                            if len(pbr) >= 12:
+                                source = "yfinance-equity-series"
 
                     # 최후 수단: 최신 equity 1개로 역산
                     if len(pbr) == 0 and eq_series:
@@ -361,10 +377,13 @@ def build_pbr_statistics(symbol, price_df):
 
         pbr = pbr.resample("ME").last().dropna()
 
-        if len(pbr) < 36:
+        # yfinance-equity-series는 4년치가 최대이므로 24개월 이상이면 허용
+        min_months = 24 if "equity-series" in source else 36
+
+        if len(pbr) < min_months:
             return {
                 "available": False,
-                "reason": f"데이터 부족(3년 미만): {len(pbr)}개월",
+                "reason": f"데이터 부족({min_months}개월 미만): {len(pbr)}개월",
                 "current_pbr": None, "mean_pbr": None, "std_pbr": None,
                 "zscore": None, "sample_months": len(pbr),
                 "sample_grade": "Abort", "percentile": None, "source": source,
