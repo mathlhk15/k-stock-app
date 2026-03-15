@@ -16,7 +16,6 @@ st.title("📊 한국형 퀀트 주식 분석 엔진")
 user_input = st.text_input("회사명 또는 종목코드 입력", "삼성전자")
 
 if user_input:
-
     symbol, name, market = resolve_kr_symbol(user_input)
 
     if symbol is None:
@@ -37,4 +36,4 @@ if user_input:
 
     scores = calculate_scores(price_df, pbr_stats)
 
-    render_result(symbol, name, market, pbr_stats, scores)
+    render_result(symbol, name, market, pbr_stats, scores, price_df)
