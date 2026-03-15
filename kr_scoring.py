@@ -319,7 +319,15 @@ def calculate_scores(price_df, pbr_stats, quality_result,
     score = 0
     reasons = []
 
-    # Valuation
+    # 모멘텀 강도 사전 계산 (Valuation 감점 완화에 사용)
+    mo_strong = False
+    if momentum_result and momentum_result.get("available"):
+        r6m = momentum_result.get("r6m")
+        r12m = momentum_result.get("r12m")
+        if (r6m is not None and r6m >= 30) or (r12m is not None and r12m >= 30):
+            mo_strong = True
+
+    # Valuation (모멘텀 강할 때 고평가 감점 반감)
     if pbr_stats.get("available"):
         z = pbr_stats.get("zscore")
         if z <= -1.5:
@@ -329,9 +337,15 @@ def calculate_scores(price_df, pbr_stats, quality_result,
         elif z <= -0.5:
             score += 20; reasons.append("Valuation +20")
         elif z >= 1.5:
-            score -= 40; reasons.append("Valuation -40")
+            if mo_strong:
+                score -= 20; reasons.append("Valuation -20 (모멘텀 반감)")
+            else:
+                score -= 40; reasons.append("Valuation -40")
         elif z >= 1.0:
-            score -= 20; reasons.append("Valuation -20")
+            if mo_strong:
+                score -= 10; reasons.append("Valuation -10 (모멘텀 반감)")
+            else:
+                score -= 20; reasons.append("Valuation -20")
 
     # Quality
     if quality_result.get("available"):
@@ -352,12 +366,21 @@ def calculate_scores(price_df, pbr_stats, quality_result,
             score += rs
             reasons.append(f"Risk {'+' if rs > 0 else ''}{rs}")
 
-    # Shareholder
+    # 주주환원 + PEG 점수
     if shareholder_result and shareholder_result.get("available"):
         ss = shareholder_result.get("score", 0)
         if ss != 0:
             score += ss
             reasons.append(f"배당 +{ss}")
+        # PEG 가산점: PEG < 1이면 성장 대비 저평가
+        peg = shareholder_result.get("peg")
+        if peg is not None:
+            if peg < 0.5:
+                score += 15; reasons.append("PEG<0.5 +15")
+            elif peg < 1.0:
+                score += 10; reasons.append("PEG<1.0 +10")
+            elif peg < 1.5:
+                score += 5;  reasons.append("PEG<1.5 +5")
 
     # 기술적
     ma20  = price_df["MA20"].iloc[-1]
@@ -371,18 +394,33 @@ def calculate_scores(price_df, pbr_stats, quality_result,
     if is_valid(rsi) and rsi >= 50:
         score += 5; reasons.append("RSI>=50 +5")
 
-    if score >= 80:   grade = "강한 매수"
-    elif score >= 65: grade = "매수"
-    elif score >= 50: grade = "보류"
-    elif score >= 35: grade = "주의"
-    else:             grade = "회피"
+    # ── 등급 판정 ──────────────────────────────
+    # 성장주 판별: 모멘텀 강 + ROE 우량 + PEG < 1
+    peg_val  = (shareholder_result or {}).get("peg")
+    roe_pct  = quality_result.get("roe_percentile")
+    is_growth = (
+        mo_strong
+        and is_valid(roe_pct) and roe_pct >= 70
+        and peg_val is not None and peg_val < 1.0
+    )
+
+    if score >= 80:   grade = "Strong Buy"
+    elif score >= 65: grade = "Buy"
+    elif score >= 50:
+        grade = "Growth" if is_growth else "Hold"
+    elif score >= 35:
+        grade = "Growth" if is_growth else "Caution"
+    elif score >= 20:
+        grade = "Growth" if is_growth else "Avoid"
+    else:
+        grade = "Avoid"
 
     if not pbr_stats.get("available") and grade in ["Strong Buy", "Buy"]:
         grade = "Hold"
     if pbr_stats.get("sample_grade") == "Limited" and grade == "Strong Buy":
         grade = "Buy"
 
-    return {"score": score, "grade": grade, "reasons": reasons}
+    return {"score": score, "grade": grade, "reasons": reasons, "is_growth": is_growth}
 
 
 def build_analysis_payload(
