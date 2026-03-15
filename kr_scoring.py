@@ -39,16 +39,33 @@ def _rename_fundamental_columns(df: pd.DataFrame) -> pd.DataFrame:
     return temp
 
 
+def _load_market_fundamental(today: str, market: str):
+    """pykrx market 파라미터 실패 시 전체 조회 fallback"""
+    try:
+        df = stock.get_market_fundamental_by_ticker(today, market=market)
+        if df is not None and len(df) > 0:
+            return df
+    except Exception:
+        pass
+    try:
+        df = stock.get_market_fundamental_by_ticker(today)
+        if df is not None and len(df) > 0:
+            return df
+    except Exception:
+        pass
+    return None
+
+
 def calculate_quality_score(symbol, market, listing_df):
     """
-    v4.2
+    v4.3
+    - pykrx market 조회 실패 시 전체 조회 fallback
     - 동일 시장 + 동일 섹터 우선
-    - 실패 시 시장 전체 fallback
     - 컬럼명 방어
     """
     try:
         today = _get_last_trading_date()
-        df = stock.get_market_fundamental_by_ticker(today, market=market)
+        df = _load_market_fundamental(today, market)
 
         if df is None or len(df) == 0:
             return {
@@ -57,7 +74,7 @@ def calculate_quality_score(symbol, market, listing_df):
                 "roe": None,
                 "roe_percentile": None,
                 "sector": None,
-                "reason": "ROE 데이터 없음",
+                "reason": "ROE 데이터 없음 (pykrx 응답 없음)",
             }
 
         temp = _rename_fundamental_columns(df).reset_index()
