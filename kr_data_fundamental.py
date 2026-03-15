@@ -1,15 +1,16 @@
 """
-kr_data_fundamental.py  v5.4
-핵심 변경:
-- PBR 시계열: FinanceDataReader KRX 일별 데이터를 primary로 사용
-  fdr.DataReader(symbol) → 일별 OHLCV + PBR/PER/EPS/BPS/DIV 포함
-- yfinance는 ROE/DPS/DIV 등 FDR에 없는 항목만 보조로 사용
-- funda_snapshot: FDR 최신값 우선, yfinance 보완
+kr_data_fundamental.py  v6.0
+DART OpenAPI 기반으로 전면 업그레이드:
+- PBR 시계열: DART 연도별 BPS + FDR 월별 주가 → 정확한 PBR 계산
+- funda_snapshot: DART 최신 재무제표 직접 값
+- ROE: DART 당기순이익 / 자본으로 직접 계산
+- yfinance는 DART 실패 시 보조로만 사용
 """
 import numpy as np
 import pandas as pd
 import FinanceDataReader as fdr
 import yfinance as yf
+import streamlit as st
 from datetime import datetime, timedelta
 
 
@@ -17,123 +18,324 @@ def is_valid(v):
     return v is not None and not pd.isna(v) and np.isfinite(v)
 
 
+def _get_dart_key() -> str | None:
+    """Streamlit secrets에서 DART API 키 로드"""
+    try:
+        return st.secrets["DART_API_KEY"]
+    except Exception:
+        return None
+
+
 def _to_yf_symbol(symbol: str) -> str:
     return f"{symbol}.KS"
 
 
-def _load_fdr_data(symbol: str) -> pd.DataFrame:
+# ──────────────────────────────────────────────
+# DART 유틸
+# ──────────────────────────────────────────────
+
+def _get_dart_corp_code(symbol: str) -> str | None:
     """
-    FDR로 전체 이력 로드.
-    컬럼: Open High Low Close Volume + Change Comp MarketCap
-    KRX 종목은 펀더멘털 컬럼(PBR 등)이 없을 수 있음 → 별도 처리
+    종목코드 → DART corp_code 변환
+    opendartreader 사용
     """
     try:
-        df = fdr.DataReader(symbol)
-        if df is None or df.empty:
+        import opendartreader as odr
+        key = _get_dart_key()
+        if not key:
+            return None
+        odr.dart.api_key = key
+        corp = odr.dart.find_corp_code(stock_code=symbol)
+        if corp and len(corp) > 0:
+            return corp.iloc[0]["corp_code"]
+    except Exception:
+        pass
+    return None
+
+
+def _get_dart_financial_statements(symbol: str, years: int = 5) -> pd.DataFrame:
+    """
+    DART에서 연도별 재무제표(단일법인, 연결 우선) 가져오기.
+    반환: 연도 인덱스, 컬럼: bps, eps, roe, per, pbr, dps, div
+    """
+    key = _get_dart_key()
+    if not key:
+        return pd.DataFrame()
+
+    try:
+        import opendartreader as odr
+        odr.dart.api_key = key
+
+        current_year = datetime.today().year
+        rows = []
+
+        for year in range(current_year - years, current_year + 1):
+            try:
+                # 연결 재무제표 우선 (CFS), 없으면 개별 (OFS)
+                for rpt_tp in ["CFS", "OFS"]:
+                    df = odr.dart.finstate(
+                        symbol,
+                        year,
+                        reprt_code="11011",  # 사업보고서
+                    )
+                    if df is not None and len(df) > 0:
+                        break
+
+                if df is None or len(df) == 0:
+                    continue
+
+                # 주요 항목 추출
+                def _get_val(account_nm_list):
+                    for nm in account_nm_list:
+                        hit = df[df["account_nm"].str.contains(nm, na=False)]
+                        if len(hit) > 0:
+                            v = hit.iloc[0].get("thstrm_amount") or hit.iloc[0].get("thstrm_add_amount")
+                            if v is not None:
+                                try:
+                                    return float(str(v).replace(",", "").replace(" ", ""))
+                                except Exception:
+                                    pass
+                    return None
+
+                net_income = _get_val(["당기순이익", "연결당기순이익"])
+                equity     = _get_val(["자본총계", "지배기업주주지분", "자본합계"])
+                assets     = _get_val(["자산총계"])
+
+                if equity and equity > 0:
+                    rows.append({
+                        "year": year,
+                        "equity": equity,
+                        "net_income": net_income,
+                        "assets": assets,
+                        "roe": (net_income / equity) if net_income else None,
+                    })
+
+            except Exception:
+                continue
+
+        if not rows:
             return pd.DataFrame()
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-        return df
+
+        result = pd.DataFrame(rows).set_index("year").sort_index()
+        return result
+
     except Exception:
         return pd.DataFrame()
 
 
-def _load_fdr_fundamental_history(symbol: str) -> pd.Series:
+def _get_dart_key_ratios(symbol: str) -> pd.DataFrame:
     """
-    FDR KRX fundamental 일별 PBR 시계열.
-    fdr.DataReader(symbol)에 PBR 컬럼이 없으면
-    fdr.StockListing + 날짜별 조회로 대체.
+    DART 주요재무지표 API (fnlttSinglAcntAll 또는 fnlttMultiAcnt)
+    BPS, EPS, PER, PBR, DIV, DPS 연도별 시계열
     """
-    # 방법 1: DataReader에 PBR 컬럼 포함 여부 확인
+    key = _get_dart_key()
+    if not key:
+        return pd.DataFrame()
+
+    try:
+        import opendartreader as odr
+        odr.dart.api_key = key
+
+        current_year = datetime.today().year
+        rows = []
+
+        for year in range(current_year - 10, current_year + 1):
+            try:
+                df = odr.dart.finstate_all(symbol, year, reprt_code="11011")
+                if df is None or len(df) == 0:
+                    continue
+
+                def _pick(names):
+                    for nm in names:
+                        hit = df[df["account_nm"].str.contains(nm, na=False)]
+                        if len(hit) > 0:
+                            v = hit.iloc[0].get("thstrm_amount")
+                            if v is not None:
+                                try:
+                                    return float(str(v).replace(",", "").replace(" ", ""))
+                                except Exception:
+                                    pass
+                    return None
+
+                bps = _pick(["주당순자산가치", "BPS", "주당장부가치"])
+                eps = _pick(["주당순이익", "EPS", "기본주당순이익"])
+                dps = _pick(["주당배당금", "DPS"])
+                div = _pick(["배당수익률", "시가배당율"])
+
+                if bps:
+                    rows.append({
+                        "year": year,
+                        "BPS": bps,
+                        "EPS": eps,
+                        "DPS": dps,
+                        "DIV": div,
+                    })
+
+            except Exception:
+                continue
+
+        if not rows:
+            return pd.DataFrame()
+
+        return pd.DataFrame(rows).set_index("year").sort_index()
+
+    except Exception:
+        return pd.DataFrame()
+
+
+# ──────────────────────────────────────────────
+# PBR 시계열
+# ──────────────────────────────────────────────
+
+def _get_price_monthly(symbol: str) -> pd.Series:
+    """FDR에서 월별 주가 이력"""
     try:
         df = fdr.DataReader(symbol)
-        if df is not None and not df.empty and "PBR" in df.columns:
-            df.index = pd.to_datetime(df.index)
-            pbr = pd.to_numeric(df["PBR"], errors="coerce").dropna()
-            pbr = pbr[pbr > 0]
-            if len(pbr) >= 12:
-                return pbr, "fdr-direct"
+        if df is None or df.empty:
+            return pd.Series(dtype=float)
+        df.index = pd.to_datetime(df.index)
+        return df["Close"].resample("ME").last().dropna()
+    except Exception:
+        return pd.Series(dtype=float)
+
+
+def _build_pbr_from_dart_bps(symbol: str, price_monthly: pd.Series) -> tuple[pd.Series, str]:
+    """
+    DART 연도별 BPS + 월별 주가 → PBR 시계열
+    BPS를 연말 기준으로 forward-fill
+    """
+    try:
+        ratios = _get_dart_key_ratios(symbol)
+
+        if ratios.empty or "BPS" not in ratios.columns:
+            # finstate_all 실패 시 finstate로 직접 계산
+            fin = _get_dart_financial_statements(symbol)
+            if fin.empty or "equity" not in fin.columns:
+                return pd.Series(dtype=float), "NONE"
+
+            # 발행주식수 추정 (yfinance)
+            try:
+                info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
+                shares = float(
+                    info.get("sharesOutstanding")
+                    or info.get("impliedSharesOutstanding")
+                    or 0
+                )
+            except Exception:
+                shares = 0
+
+            if shares <= 0:
+                return pd.Series(dtype=float), "NONE"
+
+            bps_annual = (fin["equity"] / shares).dropna()
+        else:
+            bps_annual = pd.to_numeric(ratios["BPS"], errors="coerce").dropna()
+
+        if len(bps_annual) < 3:
+            return pd.Series(dtype=float), "NONE"
+
+        # 연말 날짜로 인덱스 설정
+        bps_annual.index = pd.to_datetime(
+            [f"{y}-12-31" for y in bps_annual.index]
+        )
+        bps_annual = bps_annual.sort_index()
+
+        # 월말로 forward-fill
+        bps_monthly = bps_annual.resample("ME").last().reindex(
+            price_monthly.index, method="ffill"
+        ).dropna()
+
+        pbr = price_monthly.reindex(bps_monthly.index) / bps_monthly
+        pbr = pbr.dropna()
+        pbr = pbr[(pbr > 0) & (pbr < 50)]
+
+        if len(pbr) >= 12:
+            return pbr, "dart-bps"
+
     except Exception:
         pass
 
     return pd.Series(dtype=float), "NONE"
 
 
-def _get_yf_info(symbol: str) -> dict:
-    try:
-        return yf.Ticker(_to_yf_symbol(symbol)).info or {}
-    except Exception:
-        return {}
-
-
-def _get_yf_equity_latest(symbol: str) -> float | None:
-    """yfinance 분기 balance sheet에서 최신 Stockholders Equity"""
-    try:
-        ticker = yf.Ticker(_to_yf_symbol(symbol))
-        for bs in [ticker.quarterly_balance_sheet, ticker.balance_sheet]:
-            if bs is None or bs.empty:
-                continue
-            for row_name in ["Stockholders Equity", "Common Stock Equity",
-                             "Total Equity Gross Minority Interest"]:
-                if row_name in bs.index:
-                    row = pd.to_numeric(bs.loc[row_name], errors="coerce").dropna()
-                    if len(row) > 0:
-                        return float(row.iloc[0])
-    except Exception:
-        pass
-    return None
-
-
 def build_pbr_statistics(symbol, price_df):
     """
-    v5.4 — FDR 일별 PBR primary
+    v6.0 — DART BPS primary, FDR/yfinance fallback
     """
     try:
-        pbr_daily, source = _load_fdr_fundamental_history(symbol)
+        price_monthly = _get_price_monthly(symbol)
 
-        # FDR에 PBR 없으면 yfinance equity + 월별 주가로 구성
-        if len(pbr_daily) == 0:
+        if len(price_monthly) == 0:
+            # price_df fallback
+            price_monthly = price_df["Close"].resample("ME").last().dropna()
+
+        pbr, source = pd.Series(dtype=float), "NONE"
+
+        # 1차: DART BPS 기반
+        pbr, source = _build_pbr_from_dart_bps(symbol, price_monthly)
+
+        # 2차: FDR PBR 컬럼 직접
+        if len(pbr) == 0:
             try:
-                info = _get_yf_info(symbol)
-                shares_out = float(
-                    info.get("sharesOutstanding")
-                    or info.get("impliedSharesOutstanding")
-                    or 0
-                )
-                current_price = float(
-                    info.get("currentPrice")
-                    or info.get("regularMarketPrice")
-                    or 0
-                )
-                equity_latest = _get_yf_equity_latest(symbol)
-
-                if shares_out > 0 and equity_latest and equity_latest > 0 and current_price > 0:
-                    # 현재 PBR = 시가총액 / 자본
-                    current_marketcap = current_price * shares_out
-                    current_pbr_now = current_marketcap / equity_latest
-
-                    if 0.1 < current_pbr_now < 30:
-                        # 현재 BPS 역산 후 price_df 주가 이력에 적용
-                        current_bps = current_price / current_pbr_now
-                        price_hist = price_df["Close"].resample("ME").last().dropna()
-                        pbr_daily = price_hist / current_bps
-                        pbr_daily = pbr_daily[(pbr_daily > 0) & (pbr_daily < 50)]
-                        source = "yfinance-equity-reverse"
+                df = fdr.DataReader(symbol)
+                if df is not None and not df.empty and "PBR" in df.columns:
+                    df.index = pd.to_datetime(df.index)
+                    pbr_daily = pd.to_numeric(df["PBR"], errors="coerce").dropna()
+                    pbr_daily = pbr_daily[pbr_daily > 0]
+                    if len(pbr_daily) >= 12:
+                        pbr = pbr_daily.resample("ME").last().dropna()
+                        source = "fdr-direct"
             except Exception:
                 pass
 
-        if len(pbr_daily) == 0:
+        # 3차: yfinance equity + 현재 주가 역산
+        if len(pbr) == 0:
+            try:
+                info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
+                shares = float(
+                    info.get("sharesOutstanding")
+                    or info.get("impliedSharesOutstanding") or 0
+                )
+                current_price = float(
+                    info.get("currentPrice")
+                    or info.get("regularMarketPrice") or 0
+                )
+                # yfinance equity
+                ticker = yf.Ticker(_to_yf_symbol(symbol))
+                eq_series = {}
+                for bs in [ticker.quarterly_balance_sheet, ticker.balance_sheet]:
+                    if bs is None or bs.empty:
+                        continue
+                    for rn in ["Stockholders Equity", "Common Stock Equity"]:
+                        if rn in bs.index:
+                            row = pd.to_numeric(bs.loc[rn], errors="coerce").dropna()
+                            row.index = pd.to_datetime(row.index).tz_localize(None)
+                            for dt, v in row.items():
+                                eq_series[dt] = v
+                            break
+
+                if eq_series and shares > 0 and current_price > 0:
+                    eq_s = pd.Series(eq_series).sort_index()
+                    eq_latest = float(eq_s.iloc[-1])
+                    current_pbr_now = (current_price * shares) / eq_latest
+                    if 0.1 < current_pbr_now < 30:
+                        current_bps = current_price / current_pbr_now
+                        pbr = price_monthly / current_bps
+                        pbr = pbr[(pbr > 0) & (pbr < 50)]
+                        source = "yfinance-reverse"
+            except Exception:
+                pass
+
+        if len(pbr) == 0:
             return {
                 "available": False,
-                "reason": "PBR 데이터 없음 (FDR + yfinance 모두 실패)",
+                "reason": "PBR 데이터 없음 (DART + FDR + yfinance 모두 실패)",
                 "current_pbr": None, "mean_pbr": None, "std_pbr": None,
                 "zscore": None, "sample_months": 0, "sample_grade": "N/A",
                 "percentile": None, "source": "NONE",
             }
 
-        # 월말 리샘플링
-        pbr = pbr_daily.resample("ME").last().dropna()
-        pbr = pbr[(pbr > 0) & (pbr < 50)]
+        pbr = pbr.resample("ME").last().dropna()
 
         if len(pbr) < 36:
             return {
@@ -181,66 +383,90 @@ def build_pbr_statistics(symbol, price_df):
         }
 
 
+# ──────────────────────────────────────────────
+# funda_snapshot
+# ──────────────────────────────────────────────
+
 def get_basic_fundamental_snapshot(symbol):
     """
-    v5.4
-    - FDR 최신 행에서 PBR/PER/BPS/EPS/DIV 우선
-    - yfinance에서 ROE/DPS 보완
+    v6.0 — DART 주요재무지표 우선, yfinance 보완
     """
     result = {
         "BPS": None, "PER": None, "PBR": None,
         "EPS": None, "DIV": None, "DPS": None,
     }
 
-    # 1차: FDR
+    # 1차: DART 최신 연도 주요재무지표
+    try:
+        ratios = _get_dart_key_ratios(symbol)
+        if not ratios.empty:
+            last = ratios.iloc[-1]
+            for col in ["BPS", "EPS", "DPS", "DIV"]:
+                if col in last.index:
+                    v = last[col]
+                    if is_valid(v):
+                        result[col] = round(float(v), 2 if col == "DIV" else 0)
+    except Exception:
+        pass
+
+    # 2차: FDR 최신 행
     try:
         df = fdr.DataReader(symbol)
         if df is not None and not df.empty:
-            last = df.iloc[-1]
+            last_row = df.iloc[-1]
             for col in ["BPS", "PER", "PBR", "EPS", "DIV"]:
-                if col in last.index:
-                    v = pd.to_numeric(last[col], errors="coerce")
+                if result[col] is None and col in last_row.index:
+                    v = pd.to_numeric(last_row[col], errors="coerce")
                     if pd.notna(v) and np.isfinite(v) and v != 0:
                         result[col] = round(float(v), 2)
     except Exception:
         pass
 
-    # 2차: yfinance 보완 (FDR에 없는 항목)
+    # 3차: yfinance 보완
     try:
-        info = _get_yf_info(symbol)
-        if info:
-            # DPS
-            if result["DPS"] is None:
-                dps = info.get("lastDividendValue")
-                if dps is not None:
-                    result["DPS"] = round(float(dps), 0)
+        info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
 
-            # DIV (yfinance는 이미 퍼센트)
-            if result["DIV"] is None:
-                div = info.get("dividendYield")
-                if div is not None:
-                    result["DIV"] = round(float(div), 2)
+        if result["DPS"] is None:
+            dps = info.get("lastDividendValue")
+            if dps is not None:
+                result["DPS"] = round(float(dps), 0)
 
-            # PBR (FDR에 없을 때)
-            if result["PBR"] is None:
-                shares_out = float(
-                    info.get("sharesOutstanding")
-                    or info.get("impliedSharesOutstanding")
-                    or 0
-                )
-                current_price = float(
-                    info.get("currentPrice")
-                    or info.get("regularMarketPrice")
-                    or 0
-                )
-                equity = _get_yf_equity_latest(symbol)
-                if equity and equity > 0 and shares_out > 0 and current_price > 0:
-                    bps_calc = equity / shares_out
-                    if bps_calc > 100:  # KRW 단위 확인
-                        pbr_calc = current_price / bps_calc
-                        result["PBR"] = round(pbr_calc, 2)
-                        if result["BPS"] is None:
-                            result["BPS"] = round(bps_calc, 0)
+        if result["DIV"] is None:
+            div = info.get("dividendYield")
+            if div is not None:
+                result["DIV"] = round(float(div), 2)
+
+        # PBR/BPS (DART/FDR 모두 없을 때)
+        if result["PBR"] is None or result["BPS"] is None:
+            shares = float(
+                info.get("sharesOutstanding")
+                or info.get("impliedSharesOutstanding") or 0
+            )
+            current_price = float(
+                info.get("currentPrice")
+                or info.get("regularMarketPrice") or 0
+            )
+            ticker = yf.Ticker(_to_yf_symbol(symbol))
+            for bs in [ticker.quarterly_balance_sheet, ticker.balance_sheet]:
+                if bs is None or bs.empty:
+                    continue
+                for rn in ["Stockholders Equity", "Common Stock Equity"]:
+                    if rn in bs.index:
+                        eq = pd.to_numeric(bs.loc[rn], errors="coerce").dropna()
+                        if len(eq) > 0 and shares > 0:
+                            bps_calc = float(eq.iloc[0]) / shares
+                            if bps_calc > 100:
+                                if result["BPS"] is None:
+                                    result["BPS"] = round(bps_calc, 0)
+                                if result["PBR"] is None and current_price > 0:
+                                    result["PBR"] = round(current_price / bps_calc, 2)
+                        break
+                break
+
+        if result["PER"] is None:
+            per = info.get("trailingPE") or info.get("forwardPE")
+            if per:
+                result["PER"] = round(float(per), 2)
 
     except Exception:
         pass
