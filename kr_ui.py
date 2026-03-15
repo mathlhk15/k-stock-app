@@ -620,7 +620,10 @@ def render_full_report(a):
 
     # ── AI 투자 요약 ──
     st.markdown("### 🤖 AI 투자 요약")
-    if st.button("✨ AI 분석 생성", key="kr_ai_btn", use_container_width=True):
+    _api_key_check = st.secrets.get("ANTHROPIC_API_KEY", "") if hasattr(st, "secrets") else ""
+    if not _api_key_check:
+        st.info("💡 AI 분석을 활성화하려면 Streamlit Cloud → Settings → Secrets에 `ANTHROPIC_API_KEY = \"sk-ant-...\"` 를 추가해주세요.")
+    if st.button("✨ AI 분석 생성", key="kr_ai_btn", use_container_width=True, disabled=not _api_key_check):
         with st.spinner("Claude가 분석 중입니다..."):
             try:
                 import requests as _req
@@ -688,7 +691,11 @@ def render_full_report(a):
 
                 _resp = _req.post(
                     "https://api.anthropic.com/v1/messages",
-                    headers={"Content-Type": "application/json"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-api-key": st.secrets.get("ANTHROPIC_API_KEY", ""),
+                        "anthropic-version": "2023-06-01",
+                    },
                     json={
                         "model": "claude-sonnet-4-20250514",
                         "max_tokens": 1000,
