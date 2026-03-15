@@ -86,14 +86,16 @@ if user_input:
             _t2 = yf.Ticker(f"{symbol}.KS")
             _ann = _t2.balance_sheet
             if _ann is not None and not _ann.empty and "Stockholders Equity" in _ann.index:
-                st.write(_ann.loc["Stockholders Equity"].to_dict())
+                _eq = _ann.loc["Stockholders Equity"]
+                st.write({str(k): v for k, v in _eq.items()})
             else:
                 st.write("없음")
 
             st.markdown("#### quarterly Stockholders Equity 시계열")
             _qtr = _t2.quarterly_balance_sheet
             if _qtr is not None and not _qtr.empty and "Stockholders Equity" in _qtr.index:
-                st.write(_qtr.loc["Stockholders Equity"].to_dict())
+                _eq2 = _qtr.loc["Stockholders Equity"]
+                st.write({str(k): v for k, v in _eq2.items()})
             else:
                 st.write("없음")
         except Exception as _e:
