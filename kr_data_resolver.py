@@ -1,12 +1,18 @@
 import FinanceDataReader as fdr
+import pandas as pd
 
 
-def resolve_kr_symbol(user_input):
+def load_krx_listing() -> pd.DataFrame:
     df = fdr.StockListing("KRX")
 
     if "Code" in df.columns and "Symbol" not in df.columns:
         df = df.rename(columns={"Code": "Symbol"})
 
+    return df
+
+
+def resolve_kr_symbol(user_input):
+    df = load_krx_listing()
     raw = (user_input or "").strip()
 
     if not raw:
