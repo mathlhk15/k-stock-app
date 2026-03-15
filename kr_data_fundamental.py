@@ -1,44 +1,39 @@
+import os
+from typing import Any, Dict
 import numpy as np
 import pandas as pd
-import FinanceDataReader as fdr
+
+try:
+    import OpenDartReader
+except Exception:
+    OpenDartReader = None
 
 
-def build_pbr_statistics(symbol, price_df):
+def is_valid_number(v: Any) -> bool:
+    return v is not None and not pd.isna(v) and np.isfinite(v)
 
-    try:
 
-        funda = fdr.DataReader(symbol, "2010")
+def get_dart_reader():
+    api_key = os.environ.get("DART_API_KEY")
+    if api_key and OpenDartReader is not None:
+        try:
+            return OpenDartReader(api_key)
+        except Exception:
+            return None
+    return None
 
-    except:
 
-        return {"available": False}
-
-    if "Close" not in price_df:
-        return {"available": False}
-
-    monthly = price_df["Close"].resample("M").last()
-
-    if len(monthly) < 36:
-
-        return {"available": False, "reason": "데이터 부족"}
-
-    mean = monthly.mean()
-    std = monthly.std()
-
-    current = monthly.iloc[-1]
-
-    if std == 0:
-        return {"available": False}
-
-    z = (current - mean) / std
-
+def build_pbr_statistics(symbol: str, price_df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    임시 안정화 버전:
+    진짜 PBR이 계산되지 않으면 가격을 PBR처럼 쓰지 않고 N/A 처리.
+    """
     return {
-
-        "available": True,
-        "current_pbr": round(current, 3),
-        "mean_pbr": round(mean, 3),
-        "std_pbr": round(std, 3),
-        "zscore": round(z, 3),
-        "sample_months": len(monthly)
-
+        "available": False,
+        "reason": "PBR 계산 모듈 미연결",
+        "current_pbr": None,
+        "mean_pbr": None,
+        "std_pbr": None,
+        "zscore": None,
+        "sample_months": 0,
     }
