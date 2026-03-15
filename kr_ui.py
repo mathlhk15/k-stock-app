@@ -137,6 +137,39 @@ def render_full_report(a):
     bg, fg, border = _grade_color(a["grade"])
     score = a["score"]
     score_reason = " · ".join(a["score_reasons"]) if a["score_reasons"] else "가산/감산 없음"
+
+    # 점수 기여도 세분화
+    def _score_bar(label, val, max_val, color):
+        if val == 0: return ""
+        pct = min(abs(val) / max_val * 100, 100)
+        arrow = "▲" if val > 0 else "▼"
+        bar_color = color if val > 0 else "#ef4444"
+        return (
+            f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">'
+            f'<div style="font-size:11px;color:{fg};width:80px;opacity:0.85;">{label}</div>'
+            f'<div style="flex:1;background:rgba(255,255,255,0.2);border-radius:3px;height:8px;">'
+            f'<div style="width:{pct:.0f}%;background:{bar_color};height:8px;border-radius:3px;opacity:0.8;"></div></div>'
+            f'<div style="font-size:11px;font-weight:700;color:{fg};width:36px;text-align:right;">{arrow}{abs(val)}</div>'
+            f'</div>'
+        )
+
+    reasons = a.get("score_reasons", [])
+    val_score = next((int(r.split()[1]) for r in reasons if "Valuation" in r), 0)
+    qua_score = next((int(r.split()[1].replace("+","")) for r in reasons if "Quality" in r), 0)
+    mo_score  = next((int(r.split()[1]) for r in reasons if "Momentum" in r), 0)
+    ri_score  = next((int(r.split()[1]) for r in reasons if "Risk" in r), 0)
+    peg_score = next((int(r.split()[1]) for r in reasons if "PEG" in r), 0)
+    tech_score= sum([int(r.split()[1]) for r in reasons if any(k in r for k in ["정배열","RSI","배당"])], 0)
+
+    score_bars = (
+        _score_bar("Valuation", val_score, 40, "#22c55e") +
+        _score_bar("Quality",   qua_score, 30, "#22c55e") +
+        _score_bar("Momentum",  mo_score,  10, "#22c55e") +
+        _score_bar("Risk",      ri_score,   5, "#22c55e") +
+        _score_bar("PEG",       peg_score, 15, "#22c55e") +
+        _score_bar("기술적",   tech_score, 10, "#22c55e")
+    )
+
     st.markdown(
         f'<div style="background:{bg};border:2px solid {border};border-radius:16px;padding:18px;margin-bottom:18px;">'
         f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">'
@@ -145,14 +178,45 @@ def render_full_report(a):
         f'<div style="text-align:right;"><div style="font-size:11px;font-weight:700;color:{fg};letter-spacing:1px;margin-bottom:2px;">종합 점수</div>'
         f'<div style="font-size:30px;font-weight:900;color:{fg};line-height:1.1;">{score}점</div></div>'
         f'</div>'
-        f'<div style="font-size:12px;color:{fg};opacity:0.85;border-top:1px solid {border};padding-top:10px;line-height:1.6;">{score_reason}</div>'
-        + (f'<div style="font-size:11px;color:{fg};opacity:0.7;margin-top:6px;">🌱 성장주 등급: 고PBR이지만 강한 모멘텀·우량 ROE·PEG&lt;1로 성장이 밸류를 정당화하는 구간</div>' if a["grade"] == "Growth" else '')
+        f'<div style="border-top:1px solid {border};padding-top:10px;margin-bottom:8px;">{score_bars}</div>'
+        f'<div style="font-size:11px;color:{fg};opacity:0.75;line-height:1.6;">{score_reason}</div>'
+        + (f'<div style="font-size:11px;color:{fg};opacity:0.7;margin-top:6px;">🌱 성장주: 모멘텀 강 · ROE 우량 · PEG&lt;1 — 성장이 밸류를 정당화하는 구간</div>' if a["grade"] == "Growth" else '')
         + f'</div>',
         unsafe_allow_html=True,
     )
 
     if a["flags"]:
         st.success(" | ".join(a["flags"]))
+
+    # ── 현재 상태 배지 ──
+    badges = []
+    _z = a["pbr_stats"].get("zscore")
+    _mo = a.get("momentum_result", {})
+    _ri = a.get("risk_result", {})
+    _sh = a.get("shareholder_result", {})
+    _rsi = a.get("rsi")
+
+    if _z is not None:
+        if _z <= -1.5:   badges.append(("저평가 가능성", "#dcfce7", "#166534"))
+        elif _z >= 1.5:  badges.append(("고평가 주의", "#fee2e2", "#991b1b"))
+    if _mo.get("r6m") is not None and _mo["r6m"] >= 30:
+        badges.append(("추세 강화", "#dbeafe", "#1e3a8a"))
+    if _ri.get("beta") is not None and _ri["beta"] > 1.5:
+        badges.append(("고변동성", "#ffedd5", "#7c2d12"))
+    if _sh.get("peg") is not None and _sh["peg"] < 1.0:
+        badges.append(("성장 저평가(PEG<1)", "#f3e8ff", "#5b21b6"))
+    if _rsi is not None and float(_rsi) < 35:
+        badges.append(("과매도 구간", "#fef9c3", "#713f12"))
+    elif _rsi is not None and float(_rsi) > 70:
+        badges.append(("과매수 구간", "#fee2e2", "#991b1b"))
+
+    if badges:
+        badge_html = " ".join([
+            f'<span style="background:{bg};color:{fg};font-size:12px;font-weight:700;'
+            f'padding:4px 10px;border-radius:20px;margin-right:4px;">{label}</span>'
+            for label, bg, fg in badges
+        ])
+        st.markdown(f'<div style="margin-bottom:12px;">{badge_html}</div>', unsafe_allow_html=True)
 
     # ── 핵심 수치 2×2 ──
     st.markdown("### 📌 핵심 수치")
