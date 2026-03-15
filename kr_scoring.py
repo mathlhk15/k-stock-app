@@ -1,8 +1,12 @@
 """
-kr_scoring.py  v7.0
+kr_scoring.py  v7.1
 - Quality: DART ROE primary, yfinance fallback
 - 모멘텀 / 리스크 / 주주환원 지표 추가
+- v7.1: Python 3.9 호환 (str | None → Optional[str] 등)
 """
+from __future__ import annotations
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -26,14 +30,14 @@ def _to_yf_symbol(symbol: str) -> str:
     return f"{symbol}.KS"
 
 
-def _get_dart_key() -> str | None:
+def _get_dart_key() -> Optional[str]:
     try:
         return st.secrets["DART_API_KEY"]
     except Exception:
         return None
 
 
-def _get_roe_from_dart(symbol: str) -> float | None:
+def _get_roe_from_dart(symbol: str) -> Optional[float]:
     try:
         key = _get_dart_key()
         if not key:
@@ -67,7 +71,7 @@ def _get_roe_from_dart(symbol: str) -> float | None:
     return None
 
 
-def _get_roe_from_yf(symbol: str) -> float | None:
+def _get_roe_from_yf(symbol: str) -> Optional[float]:
     try:
         info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
         roe = info.get("returnOnEquity")
@@ -423,8 +427,6 @@ def calculate_scores(price_df, pbr_stats, quality_result,
     return {"score": score, "grade": grade, "reasons": reasons, "is_growth": is_growth}
 
 
-
-
 # ── 애널리스트 목표가 ──────────────────────────
 def get_analyst_data(symbol: str) -> dict:
     try:
@@ -528,7 +530,6 @@ def get_sector_relative(symbol: str, market: str, listing_df: pd.DataFrame) -> d
                 pass
             return None
 
-        stock_r = {p: {d: _ret(symbol, d) for d in [21, 63, 126]} for p in ["stock"]}
         stock_r = {d: _ret(symbol, d) for d in [21, 63, 126]}
 
         peer_rets = {}
