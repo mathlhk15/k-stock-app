@@ -47,7 +47,23 @@ def _grade_color(grade):
     }.get(grade, ("#f1f5f9", "#334155", "#64748b"))
 
 
-def card(title, value, desc="", tooltip=""):
+def _reliability_badge(level):
+    """신뢰도 배지 HTML 반환. level: 'high'|'mid'|'low'|None"""
+    cfg = {
+        "high": ("#dcfce7", "#166534", "높음"),
+        "mid":  ("#fef9c3", "#713f12", "보통"),
+        "low":  ("#fee2e2", "#7f1d1d", "낮음"),
+    }.get(level)
+    if not cfg:
+        return ""
+    bg, fg, label = cfg
+    return (
+        f'<span style="background:{bg};color:{fg};font-size:11px;font-weight:700;'
+        f'border-radius:6px;padding:2px 8px;margin-left:6px;">신뢰도: {label}</span>'
+    )
+
+
+def card(title, value, desc="", tooltip="", reliability=None):
     tooltip_html = ""
     if tooltip:
         tooltip_html = (
@@ -58,10 +74,11 @@ def card(title, value, desc="", tooltip=""):
         f'<div style="font-weight:800;font-size:20px;color:#0f172a;line-height:1.3;margin-bottom:8px;">{value}</div>'
         if value else ""
     )
+    badge = _reliability_badge(reliability)
     st.markdown(
         f'<div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;'
         f'margin-bottom:12px;box-shadow:0 1px 6px rgba(15,23,42,0.05);">'
-        f'<div style="color:#64748b;font-size:12px;font-weight:700;margin-bottom:6px;">{title}</div>'
+        f'<div style="color:#64748b;font-size:12px;font-weight:700;margin-bottom:6px;">{title}{badge}</div>'
         f'{value_html}'
         f'<div style="font-size:13px;color:#475569;line-height:1.7;white-space:pre-wrap;">{desc}</div>'
         f'{tooltip_html}'
@@ -186,12 +203,17 @@ def render_full_report(a):
             f"백분위 {fmt_pct(a['pbr_stats'].get('percentile'))}\n"
             f"표본 {a['pbr_stats'].get('sample_months')}개월 ({a['pbr_stats'].get('sample_grade')})"
         )
+        pbr_source = a["pbr_stats"].get("source", "")
+        pbr_rel = "high" if "dart" in pbr_source else ("mid" if pbr_source else "low")
         card("📊 Valuation", f"PBR {pbr_str}  ·  Z {zscore_str}", val_desc,
-             tooltip="Z-score ≤ −1 : 역사적 저평가 / ≥ +1 : 고평가. 백분위 낮을수록 과거 대비 저렴.")
+             tooltip="Z-score ≤ −1 : 역사적 저평가 / ≥ +1 : 고평가. 백분위 낮을수록 과거 대비 저렴.",
+             reliability=pbr_rel)
     else:
         card("📊 Valuation", "N/A", f"분석 불가: {a['pbr_stats'].get('reason', '')}")
 
     # 2. Quality
+    q_source = a["quality_result"].get("reason", "")
+    q_rel = "high" if "dart" in q_source else ("mid" if a["quality_result"].get("available") else "low")
     card(
         "🏅 Quality (ROE)", roe_str,
         (
@@ -201,6 +223,7 @@ def render_full_report(a):
             else f"분석 불가: {a['quality_result'].get('reason', '')}"
         ),
         tooltip="ROE = 당기순이익 ÷ 자기자본. 70백분위↑ 우량 / 90백분위↑ 최우량.",
+        reliability=q_rel,
     )
 
     # 3. 주주환원
@@ -216,9 +239,11 @@ def render_full_report(a):
             sh_lines.append(f"PER  {fmt_num(per, 1)}배")
         if peg is not None:
             sh_lines.append(f"PEG  {fmt_num(peg, 2)}  (PER ÷ EPS성장률)")
+        sh_rel = "high" if peg is not None else ("mid" if div_yield is not None else "low")
         card("💰 주주환원", fmt_pct(div_yield) if div_yield else "N/A",
              "\n".join(sh_lines),
-             tooltip="PEG < 1이면 성장 대비 저평가. 배당수익률 3%↑이면 주주환원 우수.")
+             tooltip="PEG < 1이면 성장 대비 저평가. 배당수익률 3%↑이면 주주환원 우수.",
+             reliability=sh_rel)
 
     # 4. 모멘텀
     mo = a.get("momentum_result", {})
@@ -260,8 +285,10 @@ def render_full_report(a):
         if sharpe is not None: ri_lines.append(f"Sharpe  {fmt_num(sharpe, 2)}  (위험 대비 수익)")
         if ri_lines:
             beta_str = fmt_num(beta, 2) if beta is not None else "N/A"
+            ri_rel = "high" if beta is not None and sharpe is not None else "mid"
             card("⚠️ Risk", f"Beta {beta_str}", "\n".join(ri_lines),
-                 tooltip="Beta > 1 : 시장보다 변동 큼 / Sharpe > 1 : 양호한 위험 대비 수익.")
+                 tooltip="Beta > 1 : 시장보다 변동 큼 / Sharpe > 1 : 양호한 위험 대비 수익.",
+                 reliability=ri_rel)
 
     # 볼린저밴드
     bb_pct  = a.get("bb_pct")
@@ -288,7 +315,8 @@ def render_full_report(a):
         )
         card("🎯 볼린저밴드", f"{bb_pos}  ({fmt_num(bb_pct,1)}%)",
              bb_desc,
-             tooltip="밴드 위치 0~100%. 80%↑ 과매수 주의 / 20%↓ 과매도 반등 가능. 밴드폭 축소 후 확장 시 큰 움직임 예고.")
+             tooltip="밴드 위치 0~100%. 80%↑ 과매수 주의 / 20%↓ 과매도 반등 가능. 밴드폭 축소 후 확장 시 큰 움직임 예고.",
+             reliability="high")
 
     # 6. 추세
     trend_state = "정배열 📈" if (a["ma20"] > a["ma60"] > a["ma120"]) else "혼조 / 역배열 📉"
@@ -298,16 +326,19 @@ def render_full_report(a):
         f"MA120 {fmt_krw(a['ma120'])}"
     )
     card("📐 추세", trend_state, trend_desc,
-         tooltip="MA20 > MA60 > MA120 정배열 → 단·중·장기 추세 모두 상승 방향.")
+         tooltip="MA20 > MA60 > MA120 정배열 → 단·중·장기 추세 모두 상승 방향.",
+         reliability="high")
 
     # 7. 모멘텀 기술
     card("⚡ 모멘텀 (기술적)", f"RSI {fmt_num(a['rsi'])}", a["macd_comment"],
-         tooltip="RSI 70↑ 과매수 / 30↓ 과매도. MACD > 시그널선이면 단기 모멘텀 유효.")
+         tooltip="RSI 70↑ 과매수 / 30↓ 과매도. MACD > 시그널선이면 단기 모멘텀 유효.",
+         reliability="high")
 
     # 8. 거래량
     vol_text = fmt_num(a["vol_ratio"], 2) + "배" if a["vol_ratio"] is not None else "N/A"
     card("📦 거래량", vol_text, a["volume_comment"],
-         tooltip="현재 거래량 ÷ 20일 평균. 1.5배↑ 강한 수급 / 0.7배↓ 관망세.")
+         tooltip="현재 거래량 ÷ 20일 평균. 1.5배↑ 강한 수급 / 0.7배↓ 관망세.",
+         reliability="high")
 
     # ── 지지/저항 ──
     st.markdown("### 📍 지지 / 저항")
@@ -356,5 +387,30 @@ def render_full_report(a):
         f'<div style="font-weight:900;font-size:14px;color:#991b1b;margin-bottom:8px;">🔴 약세 시나리오</div>'
         f'<div style="font-size:14px;color:#991b1b;line-height:1.8;">{a["bear_scenario"]}</div>'
         f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── 하단 출처 / 면책 고지 ──
+    pbr_src = a["pbr_stats"].get("source", "N/A")
+    q_src   = a["quality_result"].get("reason", "N/A")
+    today   = __import__("datetime").date.today().strftime("%Y.%m.%d")
+    st.markdown(
+        f'''<div style="margin-top:24px;padding:14px 16px;background:#f8fafc;
+                   border-top:1px solid #e2e8f0;border-radius:10px;
+                   font-size:12px;color:#94a3b8;line-height:1.8;">
+            <div style="font-weight:700;color:#64748b;margin-bottom:4px;">
+                📋 데이터 출처 및 면책 고지
+            </div>
+            가격 데이터: FinanceDataReader (KRX 상장 종목)<br>
+            PBR 시계열: {pbr_src} · ROE: {q_src}<br>
+            배당/재무: DART OpenAPI (키 설정 시) → yfinance fallback<br>
+            기술적 지표: 자체 계산 (MA·RSI·MACD·ATR·볼린저밴드)<br>
+            기준일: {today}<br><br>
+            <span style="color:#cbd5e1;">
+            ⚠️ 본 화면은 정보 제공용이며, 투자 권유가 아닙니다.
+            모든 투자 판단과 책임은 본인에게 있습니다.
+            데이터는 지연되거나 부정확할 수 있습니다.
+            </span>
+        </div>''',
         unsafe_allow_html=True,
     )
