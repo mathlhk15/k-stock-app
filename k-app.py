@@ -100,3 +100,19 @@ if user_input:
                 st.write("없음")
         except Exception as _e:
             st.write(f"yfinance raw 조회 실패: {_e}")
+
+        st.markdown("---")
+        st.markdown("#### FDR DataReader 컬럼 및 최신 펀더멘털")
+        try:
+            import FinanceDataReader as _fdr
+            _fdr_df = _fdr.DataReader(symbol)
+            st.write("FDR 컬럼:", list(_fdr_df.columns) if _fdr_df is not None and not _fdr_df.empty else "없음")
+            if _fdr_df is not None and not _fdr_df.empty:
+                st.write("FDR 최신 행:", {str(k): float(v) if hasattr(v, 'item') else v for k, v in _fdr_df.iloc[-1].items()})
+                pbr_col_exists = "PBR" in _fdr_df.columns
+                st.write("PBR 컬럼 존재:", pbr_col_exists)
+                if pbr_col_exists:
+                    _pbr_s = _fdr_df["PBR"].dropna()
+                    st.write(f"PBR 유효 행수: {len(_pbr_s)}, 최신값: {float(_pbr_s.iloc[-1]) if len(_pbr_s)>0 else 'N/A'}")
+        except Exception as _e2:
+            st.write(f"FDR 조회 실패: {_e2}")
