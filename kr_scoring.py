@@ -17,14 +17,15 @@ def percentile_rank(series: pd.Series, x: float) -> float:
 
 def calculate_quality_score(symbol, market, listing_df):
     """
-    v4:
-    동일 시장 + 동일 섹터 내 ROE 백분위
+    v4.1:
+    동일 시장 + 동일 섹터 우선
+    실패 시 시장 전체 ROE 백분위 fallback
     """
     try:
         today = datetime.today().strftime("%Y%m%d")
         df = stock.get_market_fundamental_by_ticker(today, market=market)
 
-        if df is None or len(df) == 0 or symbol not in df.index:
+        if df is None or len(df) == 0:
             return {
                 "available": False,
                 "score": 0,
@@ -34,8 +35,9 @@ def calculate_quality_score(symbol, market, listing_df):
                 "reason": "ROE 데이터 없음",
             }
 
-        temp = df.copy()
-        temp = temp.reset_index().rename(columns={"티커": "Symbol"})
+        temp = df.copy().reset_index()
+        symbol_col = "티커" if "티커" in temp.columns else temp.columns[0]
+        temp = temp.rename(columns={symbol_col: "Symbol"})
         temp["Symbol"] = temp["Symbol"].astype(str)
 
         temp["BPS"] = pd.to_numeric(temp["BPS"], errors="coerce")
@@ -79,15 +81,27 @@ def calculate_quality_score(symbol, market, listing_df):
                 "reason": "ROE 계산 불가",
             }
 
+        # 업종 peer 우선, 부족하면 시장 전체 fallback
         peer = merged.copy()
-        if sector is not None and pd.notna(sector):
-            peer = peer[peer["Sector"] == sector]
-
-        peer = peer[pd.to_numeric(peer["ROE"], errors="coerce").notna()]
+        if sector is not None and pd.notna(sector) and str(sector).strip() != "":
+            peer_sector = peer[peer["Sector"] == sector]
+            peer_sector = peer_sector[pd.to_numeric(peer_sector["ROE"], errors="coerce").notna()]
+            if len(peer_sector) >= 5:
+                peer = peer_sector
+            else:
+                peer = merged[pd.to_numeric(merged["ROE"], errors="coerce").notna()]
+        else:
+            peer = merged[pd.to_numeric(merged["ROE"], errors="coerce").notna()]
 
         if len(peer) < 5:
-            # 업종 표본이 너무 작으면 시장 전체 fallback
-            peer = merged[pd.to_numeric(merged["ROE"], errors="coerce").notna()]
+            return {
+                "available": False,
+                "score": 0,
+                "roe": None,
+                "roe_percentile": None,
+                "sector": sector,
+                "reason": "ROE 비교 표본 부족",
+            }
 
         pct = percentile_rank(peer["ROE"], float(current_roe))
 
@@ -120,9 +134,8 @@ def calculate_quality_score(symbol, market, listing_df):
 
 def calculate_supply_score(investor_df):
     """
-    v4:
-    최근 20거래일 외국인+기관 순매수 강도 백분위
-    (자기 분포형 유지)
+    v4.1:
+    외국인/기관 컬럼 후보 확장
     """
     try:
         if investor_df is None or len(investor_df) < 30:
@@ -136,8 +149,15 @@ def calculate_supply_score(investor_df):
 
         flow = investor_df.copy()
 
-        foreign_col = next((c for c in ["외국인합계", "외국인", "외국인계"] if c in flow.columns), None)
-        inst_col = next((c for c in ["기관합계", "기관", "기관계"] if c in flow.columns), None)
+        foreign_candidates = [
+            "외국인합계", "외국인", "외국인계", "외국인투자자", "외국인투자자계"
+        ]
+        inst_candidates = [
+            "기관합계", "기관", "기관계", "기관투자자", "기관투자자계"
+        ]
+
+        foreign_col = next((c for c in foreign_candidates if c in flow.columns), None)
+        inst_col = next((c for c in inst_candidates if c in flow.columns), None)
 
         if foreign_col is None or inst_col is None:
             return {
@@ -145,7 +165,7 @@ def calculate_supply_score(investor_df):
                 "score": 0,
                 "supply_strength": None,
                 "supply_percentile": None,
-                "reason": "외국인/기관 컬럼 없음",
+                "reason": f"외국인/기관 컬럼 없음: {list(flow.columns)}",
             }
 
         flow["foreign"] = pd.to_numeric(flow[foreign_col], errors="coerce")
@@ -244,17 +264,16 @@ def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
         reasons.append("RSI>=50 +5")
 
     if score >= 80:
-        grade = "강한매수"
+        grade = "Strong Buy"
     elif score >= 65:
-        grade = "매수"
+        grade = "Buy"
     elif score >= 50:
-        grade = "보류"
+        grade = "Hold"
     elif score >= 35:
-        grade = "주의
+        grade = "Caution"
     else:
-        grade = "회피"
+        grade = "Avoid"
 
-    # 제한 규칙
     if not pbr_stats.get("available") and grade in ["Strong Buy", "Buy"]:
         grade = "Hold"
 
