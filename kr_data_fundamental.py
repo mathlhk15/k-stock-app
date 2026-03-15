@@ -8,13 +8,33 @@ def is_valid(v):
     return v is not None and not pd.isna(v) and np.isfinite(v)
 
 
+def _rename_fundamental_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or len(df) == 0:
+        return pd.DataFrame()
+
+    temp = df.copy()
+
+    rename_map = {
+        "티커": "Symbol",
+        "BPS": "BPS",
+        "PER": "PER",
+        "PBR": "PBR",
+        "EPS": "EPS",
+        "DIV": "DIV",
+        "DPS": "DPS",
+        "배당수익률": "DIV",
+        "주당배당금": "DPS",
+    }
+
+    temp = temp.rename(columns=rename_map)
+    return temp
+
+
 def build_pbr_statistics(symbol, price_df):
     """
-    v4.1 안정화 버전
-    - pykrx 월별 PBR 우선 사용
-    - 최근 최대 120개월
-    - 최소 36개월
-    - 60개월 이상 Full / 36~59개월 Limited
+    v4.2 안정화
+    - pykrx 일별 fundamental 사용
+    - 월말 리샘플링으로 PBR 시계열 생성
     """
     try:
         end = datetime.today()
@@ -24,7 +44,6 @@ def build_pbr_statistics(symbol, price_df):
             start.strftime("%Y%m%d"),
             end.strftime("%Y%m%d"),
             symbol,
-            freq="m",
         )
 
         if funda is None or len(funda) == 0:
@@ -41,6 +60,9 @@ def build_pbr_statistics(symbol, price_df):
                 "source": "NONE",
             }
 
+        funda.index = pd.to_datetime(funda.index)
+        funda = _rename_fundamental_columns(funda)
+
         if "PBR" not in funda.columns:
             return {
                 "available": False,
@@ -55,8 +77,25 @@ def build_pbr_statistics(symbol, price_df):
                 "source": "NONE",
             }
 
-        pbr = pd.to_numeric(funda["PBR"], errors="coerce").dropna()
-        pbr = pbr[pbr > 0]
+        pbr_daily = pd.to_numeric(funda["PBR"], errors="coerce").dropna()
+        pbr_daily = pbr_daily[pbr_daily > 0]
+
+        if len(pbr_daily) == 0:
+            return {
+                "available": False,
+                "reason": "유효한 PBR 값 없음",
+                "current_pbr": None,
+                "mean_pbr": None,
+                "std_pbr": None,
+                "zscore": None,
+                "sample_months": 0,
+                "sample_grade": "N/A",
+                "percentile": None,
+                "source": "NONE",
+            }
+
+        # 월말 리샘플링
+        pbr = pbr_daily.resample("ME").last().dropna()
 
         if len(pbr) < 36:
             return {
@@ -69,7 +108,7 @@ def build_pbr_statistics(symbol, price_df):
                 "sample_months": len(pbr),
                 "sample_grade": "Abort",
                 "percentile": None,
-                "source": "pykrx",
+                "source": "pykrx-daily-resampled",
             }
 
         pbr = pbr.tail(120)
@@ -94,7 +133,7 @@ def build_pbr_statistics(symbol, price_df):
                 "sample_months": sample_months,
                 "sample_grade": sample_grade,
                 "percentile": percentile,
-                "source": "pykrx",
+                "source": "pykrx-daily-resampled",
             }
 
         z = (current_pbr - mean_pbr) / std_pbr
@@ -109,7 +148,7 @@ def build_pbr_statistics(symbol, price_df):
             "sample_months": sample_months,
             "sample_grade": sample_grade,
             "percentile": percentile,
-            "source": "pykrx",
+            "source": "pykrx-daily-resampled",
         }
 
     except Exception as e:
@@ -135,13 +174,13 @@ def get_basic_fundamental_snapshot(symbol):
         if df is None or len(df) == 0:
             return {}
 
-        # 티커가 index인 경우
+        df = _rename_fundamental_columns(df)
+
         if symbol in df.index:
             row = df.loc[symbol]
         else:
-            # 혹시 reset_index된 형태를 대비
             temp = df.reset_index()
-            symbol_col = "티커" if "티커" in temp.columns else temp.columns[0]
+            symbol_col = "Symbol" if "Symbol" in temp.columns else temp.columns[0]
             hit = temp[temp[symbol_col].astype(str) == str(symbol)]
             if len(hit) == 0:
                 return {}
@@ -153,6 +192,7 @@ def get_basic_fundamental_snapshot(symbol):
             "PBR": row.get("PBR", None),
             "EPS": row.get("EPS", None),
             "DIV": row.get("DIV", None),
+            "DPS": row.get("DPS", None),
         }
 
     except Exception:
