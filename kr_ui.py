@@ -159,7 +159,7 @@ def render_full_report(a):
     pct_color = "#16a34a" if pct >= 0 else "#dc2626"
     roe = a["quality_result"].get("roe")
     roe_str = f"{roe*100:.2f}%" if roe is not None else "N/A"
-    pbr_str = fmt_mul(a["pbr_stats"].get("current_pbr")) if a["pbr_stats"].get("available") else "N/A"
+    pbr_str = fmt_mul(a["pbr_stats"].get("current_pbr")) if a["pbr_stats"].get("current_pbr") is not None else "N/A"
 
     # PEG
     sh = a.get("shareholder_result", {})
@@ -194,22 +194,35 @@ def render_full_report(a):
     st.markdown("### 📚 분석 카드")
 
     # 1. Valuation
-    if a["pbr_stats"].get("available"):
-        zscore = a["pbr_stats"].get("zscore")
+    pbr_stats = a["pbr_stats"]
+    if pbr_stats.get("available"):
+        zscore = pbr_stats.get("zscore")
         zscore_str = fmt_num(zscore, 2) if zscore is not None else "N/A"
         val_desc = (
-            f"평균 PBR {fmt_mul(a['pbr_stats'].get('mean_pbr'))}  ·  "
+            f"평균 PBR {fmt_mul(pbr_stats.get('mean_pbr'))}  ·  "
             f"Z-score {zscore_str}  ·  "
-            f"백분위 {fmt_pct(a['pbr_stats'].get('percentile'))}\n"
-            f"표본 {a['pbr_stats'].get('sample_months')}개월 ({a['pbr_stats'].get('sample_grade')})"
+            f"백분위 {fmt_pct(pbr_stats.get('percentile'))}\n"
+            f"표본 {pbr_stats.get('sample_months')}개월 ({pbr_stats.get('sample_grade')})"
         )
-        pbr_source = a["pbr_stats"].get("source", "")
+        pbr_source = pbr_stats.get("source", "")
         pbr_rel = "high" if "dart" in pbr_source else ("mid" if pbr_source else "low")
         card("📊 Valuation", f"PBR {pbr_str}  ·  Z {zscore_str}", val_desc,
              tooltip="Z-score ≤ −1 : 역사적 저평가 / ≥ +1 : 고평가. 백분위 낮을수록 과거 대비 저렴.",
              reliability=pbr_rel)
+    elif pbr_stats.get("current_pbr") is not None:
+        # Partial: 시계열 부족이지만 현재 PBR은 있음
+        sample_months = pbr_stats.get("sample_months", 0)
+        funda = a.get("funda_snapshot", {})
+        bps_str = fmt_krw(funda.get("BPS")) if funda.get("BPS") else "N/A"
+        val_desc = (
+            f"시계열 데이터 부족 ({sample_months}개월) — Z-score 비교 불가\n"
+            f"현재 PBR만 제공됩니다. BPS {bps_str}  ·  출처: {pbr_stats.get('source','N/A')}"
+        )
+        card("📊 Valuation", f"PBR {pbr_str}", val_desc,
+             tooltip="시계열이 충분하지 않아 과거 평균 대비 비교는 불가합니다. 현재 PBR 수치만 참고하세요.",
+             reliability="low")
     else:
-        card("📊 Valuation", "N/A", f"분석 불가: {a['pbr_stats'].get('reason', '')}")
+        card("📊 Valuation", "N/A", f"분석 불가: {pbr_stats.get('reason', '')}")
 
     # 2. Quality
     q_source = a["quality_result"].get("reason", "")
