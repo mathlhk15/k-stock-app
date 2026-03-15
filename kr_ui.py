@@ -470,6 +470,102 @@ def render_full_report(a):
     )
 
 
+
+    # ── AI 투자 요약 ──
+    st.markdown("### 🤖 AI 투자 요약")
+    if st.button("✨ AI 분석 생성", key="kr_ai_btn", use_container_width=True):
+        with st.spinner("Claude가 분석 중입니다..."):
+            try:
+                import requests as _req
+
+                _z     = a["pbr_stats"].get("zscore")
+                _pbr   = a["pbr_stats"].get("current_pbr")
+                _roe   = a["quality_result"].get("roe")
+                _grade = a["grade"]
+                _score = a["score"]
+                _mo    = a.get("momentum_result", {})
+                _ri    = a.get("risk_result", {})
+                _sh    = a.get("shareholder_result", {})
+                _bb    = a.get("bb_pct")
+
+                prompt = f"""당신은 한국 주식 전문 퀀트 애널리스트입니다.
+다음 분석 데이터를 바탕으로 투자자가 바로 이해할 수 있는 **실전형 AI 요약**을 작성해주세요.
+
+[종목 정보]
+- 종목명: {a["name"]} ({a["symbol"]}) / {a["market"]}
+- 현재가: {a["current_price"]:,}원 (전일 대비 {a["pct_change"]:+.2f}%)
+
+[종합 판단]
+- 등급: {_grade} / 점수: {_score}점
+- 점수 근거: {", ".join(a["score_reasons"])}
+
+[밸류에이션]
+- 현재 PBR: {f"{_pbr:.2f}배" if _pbr else "N/A"}
+- Z-score: {f"{_z:.2f}" if _z else "N/A"} (양수=고평가, 음수=저평가)
+- PBR 백분위: {f"{a['pbr_stats'].get('percentile'):.1f}%" if a["pbr_stats"].get("percentile") else "N/A"}
+
+[품질]
+- ROE: {f"{_roe*100:.2f}%" if _roe else "N/A"}
+- 시장 내 ROE 백분위: {f"{a['quality_result'].get('roe_percentile'):.1f}%" if a["quality_result"].get("roe_percentile") else "N/A"}
+
+[모멘텀]
+- 1개월: {f"{_mo.get('r1m'):+.1f}%" if _mo.get('r1m') else "N/A"}
+- 6개월: {f"{_mo.get('r6m'):+.1f}%" if _mo.get('r6m') else "N/A"}
+- 12개월: {f"{_mo.get('r12m'):+.1f}%" if _mo.get('r12m') else "N/A"}
+- 200MA 괴리: {f"{_mo.get('ma200_gap'):+.1f}%" if _mo.get('ma200_gap') else "N/A"}
+
+[리스크]
+- Beta: {f"{_ri.get('beta'):.2f}" if _ri.get('beta') else "N/A"}
+- 연간 변동성: {f"{_ri.get('vol_1y'):.1f}%" if _ri.get('vol_1y') else "N/A"}
+- Sharpe: {f"{_ri.get('sharpe'):.2f}" if _ri.get('sharpe') else "N/A"}
+- MDD(1년): {f"{a['mdd']:.1f}%" if a.get('mdd') else "N/A"}
+
+[주주환원]
+- 배당수익률: {f"{_sh.get('div_yield'):.2f}%" if _sh.get('div_yield') else "N/A"}
+- PEG: {f"{_sh.get('peg'):.2f}" if _sh.get('peg') else "N/A"}
+- PER: {f"{_sh.get('per'):.1f}배" if _sh.get('per') else "N/A"}
+
+[기술적 지표]
+- RSI: {f"{float(a['rsi']):.1f}" if a.get('rsi') else "N/A"}
+- 추세: {"정배열" if a["ma20"] > a["ma60"] > a["ma120"] else "혼조/역배열"}
+- 볼린저밴드 위치: {f"{_bb:.1f}%" if _bb else "N/A"}
+
+[작성 지침]
+1. **현재 상태 한 줄 요약** (가장 중요한 특징 하나)
+2. **강점** (2~3가지, 구체적 수치 포함)
+3. **주의사항** (1~2가지, 구체적 수치 포함)
+4. **투자자 행동 제안** (단기/중기 각 1~2문장)
+5. 전체 길이: 300~400자
+6. 말투: 전문적이되 친근하게, 한국어로 작성
+7. 면책: 마지막에 "(본 요약은 AI 생성 참고용이며 투자 권유가 아닙니다)" 포함"""
+
+                _resp = _req.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 1000,
+                        "messages": [{"role": "user", "content": prompt}]
+                    },
+                    timeout=30,
+                )
+                _data = _resp.json()
+                _text = "".join(
+                    b["text"] for b in _data.get("content", []) if b.get("type") == "text"
+                )
+                if _text:
+                    st.markdown(
+                        f'<div style="background:#f0f9ff;border:1px solid #7dd3fc;border-radius:14px;'
+                        f'padding:18px;font-size:14px;color:#0c4a6e;line-height:1.9;white-space:pre-wrap;">' +
+                        _text +
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.warning("AI 응답을 받지 못했습니다.")
+            except Exception as _e:
+                st.error(f"AI 분석 오류: {_e}")
+
     # ── 등급 가이드 ──
     with st.expander("📖 등급 기준 가이드"):
         st.markdown(
