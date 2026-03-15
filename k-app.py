@@ -14,7 +14,7 @@ from kr_ui import render_full_report
 
 st.set_page_config(page_title="한국형 퀀트 주식 분석 엔진", layout="centered")
 
-st.title("📊 퀀트 주식 분석")
+st.title("📊 뀨의 주식 분석")
 
 user_input = st.text_input("회사명 또는 종목코드 입력", "삼성전자")
 
