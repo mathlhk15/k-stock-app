@@ -1,7 +1,17 @@
 import numpy as np
 import pandas as pd
 from pykrx import stock
-from datetime import datetime
+from datetime import datetime, timedelta
+
+
+def _get_last_trading_date() -> str:
+    """오늘이 주말/공휴일이면 가장 최근 거래일(평일)로 fallback"""
+    today = datetime.today()
+    for i in range(7):
+        d = today - timedelta(days=i)
+        if d.weekday() < 5:  # 월=0 ... 금=4
+            return d.strftime("%Y%m%d")
+    return today.strftime("%Y%m%d")
 
 
 def is_valid(v):
@@ -37,7 +47,7 @@ def calculate_quality_score(symbol, market, listing_df):
     - 컬럼명 방어
     """
     try:
-        today = datetime.today().strftime("%Y%m%d")
+        today = _get_last_trading_date()
         df = stock.get_market_fundamental_by_ticker(today, market=market)
 
         if df is None or len(df) == 0:
