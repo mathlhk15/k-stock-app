@@ -405,6 +405,64 @@ def render_full_report(a):
         unsafe_allow_html=True,
     )
 
+
+    # ── 등급 가이드 ──
+    with st.expander("📖 등급 기준 가이드"):
+        st.markdown(
+            '''
+            <div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;font-size:13px;">
+            <div style="font-weight:900;font-size:15px;color:#0f172a;margin-bottom:14px;">📊 종합 등급 기준표</div>
+            <table style="width:100%;border-collapse:collapse;">
+                <thead>
+                    <tr style="border-bottom:2px solid #e2e8f0;">
+                        <th style="text-align:left;padding:8px 10px;color:#64748b;font-size:12px;">등급</th>
+                        <th style="text-align:center;padding:8px 10px;color:#64748b;font-size:12px;">점수</th>
+                        <th style="text-align:left;padding:8px 10px;color:#64748b;font-size:12px;">의미</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr style="border-bottom:1px solid #f1f5f9;">
+                        <td style="padding:10px;"><span style="background:#dcfce7;color:#166534;font-weight:800;padding:3px 10px;border-radius:8px;">Strong Buy</span></td>
+                        <td style="text-align:center;padding:10px;font-weight:700;color:#0f172a;">80점↑</td>
+                        <td style="padding:10px;color:#475569;">밸류 저평가 + 품질 모두 우수. 가장 강한 매수 신호.</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid #f1f5f9;">
+                        <td style="padding:10px;"><span style="background:#dbeafe;color:#1e3a8a;font-weight:800;padding:3px 10px;border-radius:8px;">Buy</span></td>
+                        <td style="text-align:center;padding:10px;font-weight:700;color:#0f172a;">65점↑</td>
+                        <td style="padding:10px;color:#475569;">밸류 + 품질 양호. 매수 적합 구간.</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid #f1f5f9;">
+                        <td style="padding:10px;"><span style="background:#f3e8ff;color:#5b21b6;font-weight:800;padding:3px 10px;border-radius:8px;">Growth</span></td>
+                        <td style="text-align:center;padding:10px;font-weight:700;color:#0f172a;">20~65점</td>
+                        <td style="padding:10px;color:#475569;">고PBR이지만 강한 모멘텀·우량 ROE·PEG&lt;1로 성장이 밸류를 정당화. 성장주 특수 등급.</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid #f1f5f9;">
+                        <td style="padding:10px;"><span style="background:#fef9c3;color:#713f12;font-weight:800;padding:3px 10px;border-radius:8px;">Hold</span></td>
+                        <td style="text-align:center;padding:10px;font-weight:700;color:#0f172a;">50점↑</td>
+                        <td style="padding:10px;color:#475569;">중립 구간. 보유는 유효하나 추가 매수는 신중하게.</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid #f1f5f9;">
+                        <td style="padding:10px;"><span style="background:#ffedd5;color:#7c2d12;font-weight:800;padding:3px 10px;border-radius:8px;">Caution</span></td>
+                        <td style="text-align:center;padding:10px;font-weight:700;color:#0f172a;">35점↑</td>
+                        <td style="padding:10px;color:#475569;">고평가 또는 품질 약세. 신규 매수 주의 필요.</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px;"><span style="background:#fee2e2;color:#7f1d1d;font-weight:800;padding:3px 10px;border-radius:8px;">Avoid</span></td>
+                        <td style="text-align:center;padding:10px;font-weight:700;color:#0f172a;">35점↓</td>
+                        <td style="padding:10px;color:#475569;">고평가 + 품질·모멘텀 모두 약세. 매수 회피 구간.</td>
+                    </tr>
+                </tbody>
+            </table>
+            <div style="margin-top:14px;padding:12px;background:#f8fafc;border-radius:8px;font-size:12px;color:#64748b;line-height:1.7;">
+                <b>점수 구성</b> : Valuation (±40) · Quality (±30) · Momentum (±10) · Risk (±5) · PEG (±15) · 배당 (±5) · 기술적 (±10)<br>
+                <b>Growth 조건</b> : 6M 또는 12M 수익률 ≥ 30% <b>AND</b> ROE 70백분위↑ <b>AND</b> PEG &lt; 1.0 동시 충족<br>
+                <b>주의</b> : 펀더멘털 데이터 미확보 시 Buy 이상은 Hold로 자동 하향됩니다.
+            </div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
+
     # ── 하단 출처 / 면책 고지 ──
     pbr_src = a["pbr_stats"].get("source", "N/A")
     q_src   = a["quality_result"].get("reason", "N/A")
