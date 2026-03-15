@@ -11,9 +11,6 @@ from kr_scoring import (
     calculate_shareholder_result,
     calculate_scores,
     build_analysis_payload,
-    get_analyst_data,
-    get_earnings_surprise,
-    get_sector_relative,
 )
 from kr_ui import render_full_report
 
@@ -101,20 +98,14 @@ if user_input:
     funda_snapshot = get_basic_fundamental_snapshot(symbol)
 
     status.text("🏅 품질 / 모멘텀 분석 중...")
-    progress.progress(70)
+    progress.progress(75)
     quality_result     = calculate_quality_score(symbol, market, listing_df)
     momentum_result    = calculate_momentum_result(price_df)
     risk_result        = calculate_risk_result(symbol, price_df)
     shareholder_result = calculate_shareholder_result(symbol, funda_snapshot)
 
-    status.text("🔍 애널리스트 / 실적 / 섹터 분석 중...")
-    progress.progress(75)
-    analyst_data  = get_analyst_data(symbol)
-    earnings_data = get_earnings_surprise(symbol)
-    sector_rel    = get_sector_relative(symbol, market, listing_df)
-
     status.text("🧮 종합 점수 산출 중...")
-    progress.progress(88)
+    progress.progress(90)
     score_result = calculate_scores(
         price_df, pbr_stats, quality_result,
         momentum_result, risk_result, shareholder_result,
@@ -143,9 +134,6 @@ if user_input:
         st.write("risk_result", risk_result)
         st.write("shareholder_result", shareholder_result)
         st.write("funda_snapshot", funda_snapshot)
-        st.write("analyst_data", analyst_data)
-        st.write("earnings_data", earnings_data)
-        st.write("sector_rel", sector_rel)
         bb_cols = [c for c in price_df.columns if c.startswith("BB_")]
         if bb_cols:
             st.write("볼린저밴드 최신값", {c: round(float(price_df[c].iloc[-1]), 2) for c in bb_cols})
