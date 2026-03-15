@@ -32,14 +32,14 @@ def calculate_scores(price_df, pbr_stats):
             score += 10
 
     if score >= 80:
-        grade = "Strong Buy"
+        grade = "강한 매수"
     elif score >= 65:
-        grade = "Buy"
+        grade = "매수"
     elif score >= 50:
-        grade = "Hold"
+        grade = "보류"
     elif score >= 35:
-        grade = "Caution"
+        grade = "주의"
     else:
-        grade = "Avoid"
+        grade = "회피"
 
     return {"score": score, "grade": grade}
