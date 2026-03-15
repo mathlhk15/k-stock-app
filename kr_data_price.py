@@ -119,16 +119,21 @@ def _krx_investor_flow(symbol: str, start: str, end: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_investor_flow_data(symbol: str) -> pd.DataFrame:
+def get_investor_flow_data(symbol: str, isu_cd: str = None) -> pd.DataFrame:
     """
     최근 370일 투자자별 매매금액 조회.
+    KRX API는 ISU_CD(예: KR7005930003) 형식을 요구합니다.
+    isu_cd가 없으면 symbol(종목코드)로 fallback 시도.
     KRX 직접 호출 → 실패 시 빈 DataFrame 반환.
     """
     end = datetime.today()
     start = end - timedelta(days=370)
 
+    # ISU_CD 우선 사용, 없으면 symbol fallback
+    krx_code = isu_cd if isu_cd else symbol
+
     df = _krx_investor_flow(
-        symbol,
+        krx_code,
         start.strftime("%Y%m%d"),
         end.strftime("%Y%m%d"),
     )
