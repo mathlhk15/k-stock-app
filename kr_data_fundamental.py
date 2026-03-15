@@ -377,16 +377,30 @@ def build_pbr_statistics(symbol, price_df):
 
         pbr = pbr.resample("ME").last().dropna()
 
-        # yfinance-equity-series는 4년치가 최대이므로 24개월 이상이면 허용
-        min_months = 24 if "equity-series" in source else 36
+        # 최소 개월 기준: equity-series 12개월, 그 외 24개월
+        min_months = 12 if "equity-series" in source else 24
 
         if len(pbr) < min_months:
+            # 시계열 부족 → funda_snapshot의 현재 PBR만으로 부분 제공
+            # current_pbr은 yfinance info에서 직접 시도
+            fallback_pbr = None
+            try:
+                _info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
+                _ptb = _info.get("priceToBook")
+                if _ptb is not None and float(_ptb) > 0:
+                    fallback_pbr = float(_ptb)
+            except Exception:
+                pass
+            # pbr 시계열에서 마지막값 사용
+            if fallback_pbr is None and len(pbr) > 0:
+                fallback_pbr = float(pbr.iloc[-1])
             return {
                 "available": False,
-                "reason": f"데이터 부족({min_months}개월 미만): {len(pbr)}개월",
-                "current_pbr": None, "mean_pbr": None, "std_pbr": None,
+                "reason": f"시계열 부족({len(pbr)}개월) — 현재 PBR만 제공",
+                "current_pbr": fallback_pbr,
+                "mean_pbr": None, "std_pbr": None,
                 "zscore": None, "sample_months": len(pbr),
-                "sample_grade": "Abort", "percentile": None, "source": source,
+                "sample_grade": "Partial", "percentile": None, "source": source,
             }
 
         pbr = pbr.tail(120)
