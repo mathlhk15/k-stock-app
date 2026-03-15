@@ -28,6 +28,13 @@ if user_input:
 
     listing_df = load_krx_listing()
 
+    # ISU_CD 추출 (KRX API용 — 예: KR7005930003)
+    isu_cd = None
+    if "ISU_CD" in listing_df.columns:
+        row = listing_df[listing_df["Symbol"].astype(str) == symbol]
+        if len(row) > 0:
+            isu_cd = str(row.iloc[0]["ISU_CD"])
+
     price_df = get_price_data(symbol)
     if price_df.empty:
         st.error("가격 데이터가 부족합니다.")
@@ -35,7 +42,7 @@ if user_input:
 
     price_df = add_technical_indicators(price_df)
 
-    investor_df = get_investor_flow_data(symbol)
+    investor_df = get_investor_flow_data(symbol, isu_cd=isu_cd)
     pbr_stats = build_pbr_statistics(symbol, price_df)
     funda_snapshot = get_basic_fundamental_snapshot(symbol)
     quality_result = calculate_quality_score(symbol, market, listing_df)
