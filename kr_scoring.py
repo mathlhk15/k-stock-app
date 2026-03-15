@@ -189,83 +189,8 @@ def calculate_quality_score(symbol, market, listing_df):
         }
 
 
-def calculate_supply_score(investor_df):
-    """
-    v5.0
-    investor_df는 kr_data_price.py에서 yfinance 기관/외국인 대체 데이터로 채워짐.
-    빈 경우 N/A 처리.
-    """
-    try:
-        if investor_df is None or len(investor_df) < 30:
-            return {
-                "available": False,
-                "score": 0,
-                "supply_strength": None,
-                "supply_percentile": None,
-                "reason": "수급 데이터 없음 (pykrx 제거됨 — 추후 DART 연동 예정)",
-            }
 
-        flow = investor_df.copy()
-
-        foreign_candidates = ["외국인합계", "외국인", "외국인계", "외국인투자자"]
-        inst_candidates = ["기관합계", "기관", "기관계", "기관투자자"]
-
-        foreign_col = next((c for c in foreign_candidates if c in flow.columns), None)
-        inst_col = next((c for c in inst_candidates if c in flow.columns), None)
-
-        if foreign_col is None or inst_col is None:
-            return {
-                "available": False,
-                "score": 0,
-                "supply_strength": None,
-                "supply_percentile": None,
-                "reason": f"외국인/기관 컬럼 없음: {list(flow.columns)}",
-            }
-
-        flow["foreign"] = pd.to_numeric(flow[foreign_col], errors="coerce")
-        flow["inst"] = pd.to_numeric(flow[inst_col], errors="coerce")
-        flow["combined"] = flow["foreign"].fillna(0) + flow["inst"].fillna(0)
-        flow["rolling20"] = flow["combined"].rolling(20).sum()
-        dist = flow["rolling20"].dropna()
-
-        if len(dist) < 30:
-            return {
-                "available": False,
-                "score": 0,
-                "supply_strength": None,
-                "supply_percentile": None,
-                "reason": "20일 수급 표본 부족",
-            }
-
-        current_strength = float(dist.iloc[-1])
-        pct = percentile_rank(dist, current_strength)
-
-        if pct >= 80:
-            score = 20
-        elif pct >= 50:
-            score = 10
-        else:
-            score = 0
-
-        return {
-            "available": True,
-            "score": score,
-            "supply_strength": current_strength,
-            "supply_percentile": pct,
-            "reason": "",
-        }
-
-    except Exception as e:
-        return {
-            "available": False,
-            "score": 0,
-            "supply_strength": None,
-            "supply_percentile": None,
-            "reason": f"Supply 계산 실패: {e}",
-        }
-
-
-def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
+def calculate_scores(price_df, pbr_stats, quality_result):
     score = 0
     reasons = []
 
@@ -292,10 +217,6 @@ def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
         score += qscore
         reasons.append(f"Quality +{qscore}")
 
-    if supply_result.get("available"):
-        sscore = supply_result.get("score", 0)
-        score += sscore
-        reasons.append(f"Supply +{sscore}")
 
     ma20 = price_df["MA20"].iloc[-1]
     ma60 = price_df["MA60"].iloc[-1]
@@ -332,8 +253,8 @@ def calculate_scores(price_df, pbr_stats, quality_result, supply_result):
 
 
 def build_analysis_payload(
-    symbol, name, market, price_df, investor_df,
-    pbr_stats, funda_snapshot, quality_result, supply_result, score_result,
+    symbol, name, market, price_df,
+    pbr_stats, funda_snapshot, quality_result, score_result,
 ):
     last = price_df.iloc[-1]
     prev = price_df.iloc[-2] if len(price_df) >= 2 else last
@@ -427,7 +348,7 @@ def build_analysis_payload(
         "score": score_result["score"], "grade": score_result["grade"],
         "score_reasons": score_result["reasons"],
         "pbr_stats": pbr_stats, "funda_snapshot": funda_snapshot,
-        "quality_result": quality_result, "supply_result": supply_result,
+        "quality_result": quality_result,
         "flags": flags,
         "ma20": ma20, "ma60": ma60, "ma120": ma120,
         "rsi": rsi, "macd": macd, "macd_signal": macd_signal,
@@ -440,5 +361,5 @@ def build_analysis_payload(
         "zone2_low": zone2_low, "zone2_high": zone2_high,
         "short_strategy": short_strategy, "mid_strategy": mid_strategy,
         "bull_scenario": bull_scenario, "bear_scenario": bear_scenario,
-        "investor_df": investor_df,
+
     }
