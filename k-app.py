@@ -18,7 +18,7 @@ from kr_scoring import (
 from kr_ui import render_full_report
 
 
-st.set_page_config(page_title="꾀의 주식 분석", layout="centered")
+st.set_page_config(page_title="뀨의 주식 분석", layout="centered")
 
 st.title("📊 뀨의 주식 분석")
 
