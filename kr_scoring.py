@@ -473,9 +473,18 @@ def build_analysis_payload(
         elif z <= -1.0 and roe_pct >= 70:
             flags.append("★VALUE-UP★")
 
+    # 볼린저밴드 최신값 추출
+    bb_pct   = float(price_df["BB_PCT"].iloc[-1])   if "BB_PCT"   in price_df.columns else None
+    bb_upper = float(price_df["BB_UPPER"].iloc[-1]) if "BB_UPPER" in price_df.columns else None
+    bb_lower = float(price_df["BB_LOWER"].iloc[-1]) if "BB_LOWER" in price_df.columns else None
+    bb_mid   = float(price_df["BB_MID"].iloc[-1])   if "BB_MID"   in price_df.columns else None
+    bb_width = float(price_df["BB_WIDTH"].iloc[-1]) if "BB_WIDTH" in price_df.columns else None
+
     return {
         "symbol": symbol, "name": name, "market": market,
         "current_price": current_price, "pct_change": pct_change,
+        "bb_pct": bb_pct, "bb_upper": bb_upper, "bb_lower": bb_lower,
+        "bb_mid": bb_mid, "bb_width": bb_width,
         "score": score_result["score"], "grade": score_result["grade"],
         "score_reasons": score_result["reasons"],
         "pbr_stats": pbr_stats, "funda_snapshot": funda_snapshot,
