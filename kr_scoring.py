@@ -1,11 +1,13 @@
 """
-kr_scoring.py  v5.0
-pykrx 완전 제거 → yfinance 기반 Quality/Supply 계산
+kr_scoring.py  v6.0
+- Quality: DART ROE primary, yfinance fallback
+- ROE 점수 기준 조정: 60%→10점, 70%→20점, 90%→30점
 """
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import FinanceDataReader as fdr
+import streamlit as st
 from datetime import datetime, timedelta
 
 
@@ -24,8 +26,50 @@ def _to_yf_symbol(symbol: str) -> str:
     return f"{symbol}.KS"
 
 
+def _get_dart_key() -> str | None:
+    try:
+        return st.secrets["DART_API_KEY"]
+    except Exception:
+        return None
+
+
+def _get_roe_from_dart(symbol: str) -> float | None:
+    """DART 최신 사업보고서에서 ROE 직접 계산"""
+    try:
+        key = _get_dart_key()
+        if not key:
+            return None
+        import opendartreader as odr
+        odr.dart.api_key = key
+        year = datetime.today().year - 1  # 최신 확정 사업보고서
+
+        df = odr.dart.finstate_all(symbol, year, reprt_code="11011")
+        if df is None or len(df) == 0:
+            return None
+
+        def _pick(names):
+            for nm in names:
+                hit = df[df["account_nm"].str.contains(nm, na=False)]
+                if len(hit) > 0:
+                    v = hit.iloc[0].get("thstrm_amount")
+                    if v is not None:
+                        try:
+                            return float(str(v).replace(",", "").replace(" ", ""))
+                        except Exception:
+                            pass
+            return None
+
+        net_income = _pick(["당기순이익"])
+        equity = _pick(["자본총계", "자본합계"])
+
+        if net_income and equity and equity > 0:
+            return net_income / equity
+    except Exception:
+        pass
+    return None
+
+
 def _get_roe_from_yf(symbol: str) -> float | None:
-    """yfinance에서 ROE 가져오기"""
     try:
         info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
         roe = info.get("returnOnEquity")
@@ -37,20 +81,12 @@ def _get_roe_from_yf(symbol: str) -> float | None:
 
 
 def _build_market_roe_table(listing_df: pd.DataFrame, market: str) -> pd.DataFrame:
-    """
-    listing_df의 Symbol 목록 중 시가총액 상위 100개에서
-    yfinance ROE를 가져와 비교 테이블 구성.
-    상위 100개만 조회해 속도를 제한.
-    """
+    """시가총액 상위 100개 종목 ROE 비교 테이블 (yfinance)"""
     try:
         subset = listing_df.copy()
         subset["Symbol"] = subset["Symbol"].astype(str)
-
-        # 시장 필터
         if "Market" in subset.columns:
             subset = subset[subset["Market"].str.upper() == market.upper()]
-
-        # 시가총액 기준 상위 100개
         if "Marcap" in subset.columns:
             subset = subset.sort_values("Marcap", ascending=False).head(100)
         else:
@@ -69,44 +105,44 @@ def _build_market_roe_table(listing_df: pd.DataFrame, market: str) -> pd.DataFra
 
         if not results:
             return pd.DataFrame(columns=["Symbol", "ROE", "Sector"])
-
         return pd.DataFrame(results)
-
     except Exception:
         return pd.DataFrame(columns=["Symbol", "ROE", "Sector"])
 
 
 def calculate_quality_score(symbol, market, listing_df):
     """
-    v5.0 — pykrx 제거, yfinance 기반
-    - 해당 종목 ROE를 시장 상위 100종목과 비교
+    v6.0
+    - DART ROE primary, yfinance fallback
+    - 점수 기준: 60%↑=10점, 70%↑=20점, 90%↑=30점
     """
     try:
-        # 1. 해당 종목 ROE
-        current_roe = _get_roe_from_yf(symbol)
+        # 1. ROE: DART 우선, yfinance fallback
+        current_roe = _get_roe_from_dart(symbol)
+        roe_source = "dart"
+        if current_roe is None:
+            current_roe = _get_roe_from_yf(symbol)
+            roe_source = "yfinance"
 
         if current_roe is None:
             return {
-                "available": False,
-                "score": 0,
-                "roe": None,
-                "roe_percentile": None,
-                "sector": None,
-                "reason": "ROE 데이터 없음 (yfinance)",
+                "available": False, "score": 0,
+                "roe": None, "roe_percentile": None,
+                "sector": None, "reason": "ROE 데이터 없음 (DART + yfinance)",
             }
 
-        # 2. 섹터 정보
+        # 2. 섹터
         try:
             info = yf.Ticker(_to_yf_symbol(symbol)).info or {}
             sector = info.get("sector") or info.get("industry") or "N/A"
         except Exception:
             sector = "N/A"
 
-        # 3. 시장 비교 테이블
+        # 3. 비교 테이블
         market_table = _build_market_roe_table(listing_df, market)
 
         if len(market_table) < 5:
-            # 비교 표본 부족 시 단독 ROE로 절대 평가
+            # 절대값 기준
             if current_roe >= 0.15:
                 score = 20
             elif current_roe >= 0.08:
@@ -114,15 +150,13 @@ def calculate_quality_score(symbol, market, listing_df):
             else:
                 score = 0
             return {
-                "available": True,
-                "score": score,
-                "roe": current_roe,
-                "roe_percentile": None,
+                "available": True, "score": score,
+                "roe": current_roe, "roe_percentile": None,
                 "sector": sector,
-                "reason": "비교 표본 부족 — 절대값 기준 평가",
+                "reason": f"비교 표본 부족 — 절대값 기준 ({roe_source})",
             }
 
-        # 섹터 peer 우선, 부족하면 전체 fallback
+        # 섹터 peer 우선
         peer = market_table.copy()
         if sector != "N/A":
             peer_sector = peer[peer["Sector"] == sector]
@@ -131,30 +165,27 @@ def calculate_quality_score(symbol, market, listing_df):
 
         pct = percentile_rank(peer["ROE"], current_roe)
 
+        # v6.0 점수 기준 (삼성전자 68.75% → 10점)
         if pct >= 90:
             score = 30
         elif pct >= 70:
             score = 20
+        elif pct >= 60:
+            score = 10
         else:
             score = 0
 
         return {
-            "available": True,
-            "score": score,
-            "roe": current_roe,
-            "roe_percentile": float(pct),
-            "sector": sector,
-            "reason": "",
+            "available": True, "score": score,
+            "roe": current_roe, "roe_percentile": float(pct),
+            "sector": sector, "reason": f"source: {roe_source}",
         }
 
     except Exception as e:
         return {
-            "available": False,
-            "score": 0,
-            "roe": None,
-            "roe_percentile": None,
-            "sector": None,
-            "reason": f"Quality 계산 실패: {e}",
+            "available": False, "score": 0,
+            "roe": None, "roe_percentile": None,
+            "sector": None, "reason": f"Quality 계산 실패: {e}",
         }
 
 
